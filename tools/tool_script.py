@@ -1,8 +1,10 @@
 """脚本工具模块"""
 import os
 import subprocess
+from datetime import datetime
 
-from base_comp.tool_base import ToolBase, ToolResp, TOOL_ERROR, TOOL_SUCCESS
+from base_comp.session import SessionData
+from base_comp.tool_base import ToolBase, ToolResp, TOOL_ERROR_AI, TOOL_SUCCESS
 from base_comp.validate import init_validate, CommandContext
 
 
@@ -30,16 +32,18 @@ class ToolBaseScript(ToolBase):
             }
         """
 
-    async def execute(self, command: str, work_dir: str, args: list[str], files: list[str], **kwargs) -> ToolResp:
+    def execute(self, session_data: SessionData, command: str, work_dir: str, args: list[str], files: list[str]) -> ToolResp:
         """基础脚本执行工具"""
-
-        white_dir = kwargs["white_dir"] if "white_dir" in kwargs else os.getcwd()
-        task_id = kwargs["task_id"] if "task_id" in kwargs else "default_task"
+        if session_data is None or session_data.session is None:
+            return ToolResp(TOOL_ERROR_AI, "Error: param session illegal")
+        session = session_data.session
+        white_dir = session.white_path
+        task_id = f"{session.id}:{datetime.now().strftime('%Y%m%d%H%M%S')}"
 
         # 进行指令权限验证，如果不通过返回对应的错误信息
-        result = await init_validate().validate(CommandContext(command, args, work_dir, white_dir=white_dir,task_id=task_id))
+        result = init_validate().validate(CommandContext(command, args, work_dir, white_dir=white_dir,task_id=task_id))
         if not result.allowed:
-            return ToolResp(TOOL_ERROR, f"error: {result.message}\n{result.suggestions}")
+            return ToolResp(TOOL_ERROR_AI, f"error: {result.message}\n{result.suggestions}")
         try:
             cmd_str = f"{command}  {" ".join(args)}  {" ".join(files)}"
             r = subprocess.run(cmd_str, shell=True, cwd=work_dir,
@@ -47,7 +51,7 @@ class ToolBaseScript(ToolBase):
             out = (r.stdout + r.stderr).strip()
             return ToolResp(TOOL_SUCCESS, out[:50000] if out else "no output")
         except subprocess.TimeoutExpired:
-            return ToolResp(TOOL_ERROR, "Error: Timeout")
+            return ToolResp(TOOL_ERROR_AI, "Error: Timeout")
 
     def _get_input_schema(self) -> dict:
         return {
@@ -78,3 +82,5 @@ class ToolBaseScript(ToolBase):
             },
             "required": ["command", "work_dir", "args", "files"],
         }
+
+

@@ -103,18 +103,18 @@ class ValidationStage(ABC):
         self._next = stage
         return stage
 
-    async def validate(self, ctx: CommandContext) -> ValidationResult:
+    def validate(self, ctx: CommandContext) -> ValidationResult:
         """执行验证，返回结果或传递给下一个阶段"""
-        result = await self._validate(ctx)
+        result = self._validate(ctx)
         # 验证不通过或者执行到链尾，直接返回验证结果
         if not result.allowed or self._next is None:
             # 验证结束，打印验证消息
             return result
         # 验证通过则执行后一个验证步骤
-        return await self._next.validate(ctx)
+        return self._next.validate(ctx)
 
     @abstractmethod
-    async def _validate(self, ctx: CommandContext) -> ValidationResult:
+    def _validate(self, ctx: CommandContext) -> ValidationResult:
         """子类实现具体验证逻辑"""
         raise NotImplementedError
 
@@ -129,7 +129,7 @@ class DangerousValidator(ValidationStage):
             for pattern, level, desc in CommandRule.DANGEROUS_PATTERNS
         ]
 
-    async def _validate(self, ctx: CommandContext) -> ValidationResult:
+    def _validate(self, ctx: CommandContext) -> ValidationResult:
         """危险操作的验证操作"""
         # 拼接指令
         full_command = f"{ctx.command} {" ".join(ctx.args)}"
@@ -151,7 +151,7 @@ class DangerousValidator(ValidationStage):
 
 class PathValidator(ValidationStage):
     """路径验证，如果是会话创建根路径，直接通过，其他路径则要进行验证"""
-    async def _validate(self, ctx: CommandContext) -> ValidationResult:
+    def _validate(self, ctx: CommandContext) -> ValidationResult:
         """指令路径相关的验证，防止操作敏感路径"""
 
         if not ctx.working_dir:
@@ -203,7 +203,7 @@ class PathValidator(ValidationStage):
 class SdkValidator(ValidationStage):
     """外部调用验证，一般是调用外部服务或接口"""
     # TODO 后续补充，这个版本先不管
-    async def _validate(self, ctx: CommandContext) -> ValidationResult:
+    def _validate(self, ctx: CommandContext) -> ValidationResult:
         return ValidationResult(allowed=True)
 
 

@@ -9,7 +9,8 @@ import httpx
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 
-from base_comp.tool_base import ToolBase, ToolResp, TOOL_SUCCESS, TOOL_ERROR, TOOL_TIMEOUT
+from base_comp.tool_base import ToolBase, ToolResp, TOOL_SUCCESS, TOOL_ERROR_AI, TOOL_ERROR_USER
+
 
 # ============================================================================
 # 搜索结果数据结构
@@ -100,30 +101,30 @@ class WebFetchToolBase(ToolBase):
         }
 
 
-    async def execute(self, url: str, format: str = "text", timeout: int = 30, **kwargs) -> ToolResp:
+    def execute(self, *args, url: str, format: str = "text", timeout: int = 30) -> ToolResp:
         """执行网页获取，返回 ToolResp 对象"""
         # 验证 URL
         valid, error_msg = validate_url(url)
         if not valid:
-            return ToolResp(status_code=TOOL_ERROR, content=f"错误: {error_msg}")
+            return ToolResp(status_code=TOOL_ERROR_AI, content=f"错误: {error_msg}")
 
         # 限制超时，最大120秒
         timeout = min(timeout, 120)
 
         try:
-            async with httpx.AsyncClient(
+            with httpx.Client(
                     timeout=httpx.Timeout(timeout),
                     follow_redirects=True,
                     headers={"User-Agent": self.user_agent}
             ) as client:
-                response = await client.get(url)
+                response = client.get(url)
                 response.raise_for_status()
 
                 # 检查响应大小
                 content_length = len(response.content)
                 if content_length > self.max_response_size:
                     return ToolResp(
-                        status_code=TOOL_ERROR,
+                        status_code=TOOL_ERROR_AI,
                         content=f"错误: 响应大小 ({content_length} bytes) 超过限制 ({self.max_response_size} bytes)"
                     )
 
@@ -147,11 +148,11 @@ class WebFetchToolBase(ToolBase):
                 return ToolResp(status_code=TOOL_SUCCESS, content=content)
 
         except httpx.TimeoutException:
-            return ToolResp(status_code=TOOL_TIMEOUT, content=f"错误: 请求超时 ({timeout}秒)")
+            return ToolResp(status_code=TOOL_ERROR_AI, content=f"错误: 请求超时 ({timeout}秒)")
         except httpx.HTTPStatusError as e:
-            return ToolResp(status_code=TOOL_ERROR, content=f"错误: HTTP {e.response.status_code}")
+            return ToolResp(status_code=TOOL_ERROR_AI, content=f"错误: HTTP {e.response.status_code}")
         except Exception as e:
-            return ToolResp(status_code=TOOL_ERROR, content=f"错误: {str(e)}")
+            return ToolResp(status_code=TOOL_ERROR_AI, content=f"错误: {str(e)}")
 
 
 # ============================================================================
@@ -180,7 +181,7 @@ class CodeSearchToolBase(ToolBase):
 
     def __init__(
             self,
-            user_agent: str = "LangChain-CodeSearchTool/1.0",
+            user_agent: str = "XClaudeCode-CodeSearchTool/1.0",
             max_results: int = 20
     ):
         self.user_agent = user_agent
@@ -326,18 +327,18 @@ class CodeSearchToolBase(ToolBase):
 
         return "\n".join(output)
 
-    async def execute(
+    def execute(
             self,
+            *args,
             query: str,
             count: int = 10,
             context_lines: int = 5,
             timeout: int = 30,
-            **kwargs
     ) -> ToolResp:
         """执行代码搜索，返回 ToolResp 对象"""
         # 检查查询语句是否为空
         if not query or not query.strip():
-            return ToolResp(status_code=TOOL_ERROR, content="错误: 查询语句不能为空")
+            return ToolResp(status_code=TOOL_ERROR_AI, content="错误: 查询语句不能为空")
 
         # 限制参数范围：count和context_lines最大20，timeout最大120
         count = min(max(count, 1), 20)
@@ -348,13 +349,13 @@ class CodeSearchToolBase(ToolBase):
         graphql_query = self._build_graphql_query(query, count, context_lines)
 
         try:
-            async with httpx.AsyncClient(
+            with httpx.Client(
                     timeout=httpx.Timeout(timeout),
                     headers={
                         "User-Agent": self.user_agent,
                     }
             ) as client:
-                response = await client.post(
+                response = client.post(
                     self.GRAPHQL_URL,
                     json=graphql_query
                 )
@@ -368,18 +369,18 @@ class CodeSearchToolBase(ToolBase):
                         err.get("message", "Unknown error")
                         for err in data["errors"]
                     ]
-                    return ToolResp(status_code=TOOL_ERROR, content=f"GraphQL 错误: {', '.join(error_messages)}")
+                    return ToolResp(status_code=TOOL_ERROR_AI, content=f"GraphQL 错误: {', '.join(error_messages)}")
 
                 # 格式化并返回搜索结果
                 formatted_results = self._format_results(data, context_lines)
                 return ToolResp(status_code=TOOL_SUCCESS, content=formatted_results)
 
         except httpx.TimeoutException:
-            return ToolResp(status_code=TOOL_TIMEOUT, content=f"错误: 请求超时 ({timeout}秒)")
+            return ToolResp(status_code=TOOL_ERROR_AI, content=f"错误: 请求超时 ({timeout}秒)")
         except httpx.HTTPStatusError as e:
-            return ToolResp(status_code=TOOL_ERROR, content=f"错误: HTTP {e.response.status_code}")
+            return ToolResp(status_code=TOOL_ERROR_AI, content=f"错误: HTTP {e.response.status_code}")
         except Exception as e:
-            return ToolResp(status_code=TOOL_ERROR, content=f"错误: {str(e)}")
+            return ToolResp(status_code=TOOL_ERROR_AI, content=f"错误: {str(e)}")
 
 
 def validate_url(url: str) -> tuple[bool, str]:
