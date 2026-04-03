@@ -4,8 +4,8 @@ import os
 import dotenv
 from anthropic import Anthropic, Stream
 
-from base_comp.session import Session, SessionData, TODO_NAME, TOOL_LIMIT_TIMES
-from common import StopReason
+from base_comp.session import SessionData, TODO_NAME, TOOL_LIMIT_TIMES
+from .common import StopReason
 from manager.tools_manager import route_tool_use, get_tools_for_anthropic
 import tools
 
@@ -120,18 +120,3 @@ async def agent_loop(client: Anthropic, session_data: SessionData, messages: lis
         # len > 0 说明本轮次有用户端信息，包装到发送给AI端的信息中
         if len(user_content) > 0:
             messages.append({"role": "user", "content": user_content})
-
-
-if __name__ == '__main__':
-    output = "/example_path"
-    task1 = f"分析一下2026年3月份主流LLM（选取热度最高的十五款）的基准测试和付费套餐信息，依据其性能和收费进行性价比分析，把分析内容整理成markdown文件{output}"
-    messages = [
-        {"role":"user", "content":task1},
-    ]
-
-    # 初始化会话信息
-    session = Session(name="test_chat", root_path="/root_path")
-
-    # 开始循环执行任务
-    print("start tasks ...")
-    asyncio.run(agent_loop(model_client, SessionData(session), messages))
