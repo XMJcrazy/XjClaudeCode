@@ -3,7 +3,7 @@ import asyncio
 from base_comp.ai_model import client, MODEL
 from base_comp.prompt import PROMPT_SYS_SUB_AGENT, PROMPT_SYS_ANALYSIS, SCHEDULER_NAME, sys_task_types, \
     PROMPT_SYS_DEFAULT, get_sys_prompt, ANALYSIS_NAME, PROMPT_SYS_TASK_SCHEDULER
-from base_comp.schedule import TaskGraph, Task
+from base_comp.schedule import TaskGraph, Task, MAX_SESSION_TASK
 from base_comp.session import SessionCtx
 from .common import StopReason
 from manager.tools_manager import route_tool_use, get_tools_for_anthropic
@@ -18,8 +18,6 @@ ANTHROPIC_ALL_TOOLS = get_tools_for_anthropic()
 ANALYSIS_TOOLS = [ToolTaskAnalysis().get_anthropic_schema()]
 SCHEDULER_TOOLS = [ToolTaskScheduler().get_anthropic_schema()]
 
-# task 最大并发数
-semaphore = asyncio.Semaphore(6)
 
 # ============================================================================
 # agent会话入口，异步设计支持多会话并行
@@ -80,10 +78,12 @@ def analysis_task(session_ctx: SessionCtx, messages: list) -> str:
     for block in analysis_info.content:
         if block.type == "tool_use" and block.name == ANALYSIS_NAME:
             is_success, task_type = route_tool_use(block.name, session_ctx, **block.input)
-            # 根据分析的类别注入更精准的提示词
+            # 根据分析的类别注入更精准的提示词，ANALYSIS工具获取了分析结果直接返回
             if is_success:
                 sys_prompt = get_sys_prompt(task_type)
                 return sys_prompt
+    # 如果分析失败就返回默认提示词
+    # 这里不把返回信息加入messages，避免污染主任务上下文
     return sys_prompt
 
 
@@ -163,16 +163,20 @@ async def _run_task_scheduler(ctx: SessionCtx, main_massage: list):
             # 修改任务的状态为执行中
             async with ctx_lock:
                 ctx.task_graph.set_running(task.id)
-            # 开启一个并发的执行协程
-            tg.create_task(_sub_task_worker(ctx, task, ctx_lock, event, main_massage))
+                # 开启一个并发的执行协程
+                tg.create_task(_sub_task_worker(ctx, task, ctx_lock, event, main_massage))
 
         # 循环接收新的任务, event 由任务执行端触发
         while True:
             await event.wait()
             async with ctx_lock:
                 # 所有任务都完成直接跳出
-                if ctx.task_graph.is_all_completed(): break
+                if ctx.task_graph.is_all_completed():
+                    event.clear()
+                    break
                 add_tasks = ctx.task_graph.get_executable_tasks()
+                # 已经完成了可执行任务的获取，重置event标记
+                event.clear()
 
             if add_tasks:
                 # 存在新解锁的任务，直接并发执行
@@ -181,7 +185,7 @@ async def _run_task_scheduler(ctx: SessionCtx, main_massage: list):
                     for task in add_tasks:
                         tg.create_task(_sub_task_worker(ctx, task, ctx_lock, event, main_massage))
                         ctx.task_graph.set_running(task.id)
-            event.clear()
+
     # 所有子任务都完成了，添加相关提示
     main_massage.append({"role": "user", "content": "<reminder>All sub task completed. Please check it!</reminder>"})
 
@@ -197,15 +201,13 @@ async def _sub_task_worker(session_ctx: SessionCtx, task: Task, ctx_lock: asynci
     :return:
     """
     # 控制子任务的并发数
-    async with semaphore:
+    async with session_ctx.semaphore:
 
         # main_massage是主任务的全局信息，包含了目前所有已经完成的子任务执行结果摘要
         # 以主任务全局信息为基底加上当前任务的prompt，构建新的模型对话
         # 这样当前任务的上下文不会污染主任务上下文，并且当前任务也获得了充足的前置信息
         messages = main_massage + [{"role": "user", "content": task.prompt}]
 
-        # 表示任务是否正常完成的标志
-        task_flag = True
         # 单任务内部循环执行，收到LLM的停止消息再跳出循环
         while True:
             resp_msgs = client.messages.create(max_tokens=10 * 1024, messages=messages, model=MODEL, system=PROMPT_SYS_SUB_AGENT,
@@ -220,7 +222,6 @@ async def _sub_task_worker(session_ctx: SessionCtx, task: Task, ctx_lock: asynci
                     print(f"TASK-{task.id} FINISHED!")
                 else:
                     print(f"TASK-{task.id} STOP!  reason:{resp_msgs.stop_reason} \n content:{resp_msgs.content}")
-                    task_flag = False
                 break
 
             # 调用统一的AI模型返回信息处理方法

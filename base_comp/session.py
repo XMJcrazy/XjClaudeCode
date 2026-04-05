@@ -1,10 +1,11 @@
 """agent会话管理基础模块"""
+import asyncio
 import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
-from base_comp.schedule import  TaskGraph
+from base_comp.schedule import TaskGraph, MAX_SESSION_TASK
 
 
 # ============================================================================
@@ -58,8 +59,13 @@ session_lock = threading.Lock()
 
 @dataclass
 class SessionCtx:
-    session: Session                            # 用户会话信息
-    # sys_prompt: str                             # 系统提示词
-    need_sub: bool = False                      # 是否需要拆分子任务
-    task_graph: TaskGraph = None                # 任务规划信息，采用有向无环图结构，后续的任务控制要依赖这个
+    session: Session                                    # 用户会话信息
+    # sys_prompt: str                                   # 系统提示词
+    need_sub: bool = False                              # 是否需要拆分子任务
+    task_graph: TaskGraph = None                        # 任务规划信息，采用有向无环图结构，后续的任务控制要依赖这个
+    _semaphore = asyncio.Semaphore(MAX_SESSION_TASK)    # 会话内的任务最大并发数，执行过程中不可更改
+
+    @property
+    def semaphore(self):
+        return self._semaphore
 

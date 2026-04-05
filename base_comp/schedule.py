@@ -8,6 +8,8 @@ from typing import Dict, List, Optional
 
 # 最大子任务数量，后续可以改成配置
 MAX_NUM = 100
+# 最大单会话并发任务数
+MAX_SESSION_TASK = 6
 
 class TaskState(Enum):
     """任务状态枚举"""
