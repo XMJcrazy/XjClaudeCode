@@ -3,7 +3,7 @@ import os
 import subprocess
 from datetime import datetime
 
-from base_comp.session import SessionData
+from base_comp.session import SessionCtx
 from base_comp.tool_base import ToolBase, ToolResp, TOOL_ERROR_AI, TOOL_SUCCESS
 from base_comp.validate import init_validate, CommandContext
 
@@ -32,7 +32,7 @@ class ToolBaseScript(ToolBase):
             }
         """
 
-    def execute(self, session_data: SessionData, command: str, work_dir: str, args: list[str], files: list[str]) -> ToolResp:
+    def execute(self, session_data: SessionCtx, command: str, work_dir: str, args: list[str], files: list[str]) -> ToolResp:
         """基础脚本执行工具"""
         if session_data is None or session_data.session is None:
             return ToolResp(TOOL_ERROR_AI, "Error: param session illegal")

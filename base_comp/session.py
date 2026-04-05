@@ -3,7 +3,8 @@ import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
+
+from base_comp.schedule import  TaskGraph
 
 
 # ============================================================================
@@ -50,36 +51,15 @@ class Session:
 sessions: dict[str, list[Session]] = {}
 session_lock = threading.Lock()
 
-# planning过程中调用其它工具次数超过10次没同步规划信息就发送提醒
-TOOL_LIMIT_TIMES = 10
-TODO_NAME = "tool_todo"
-
-@dataclass
-class SubTask:
-    id: int                                 # 子任务id
-    info: str                               # 子任务具体内容
-    status: str = Literal["pending","processing","finished"]       #子任务执行状态，氛围等待中、执行中、执行完毕三个类型
-
-@dataclass
-class TodoManager:
-    task_info: str                  # 用户输入的原始任务摘要
-    sub_list: list[SubTask]         # 子任务执行信息
-    other_times: int = 0            # 其他工具调用次数，如果一直不调用todolist工具,会给AI模型发相关提示信息督促按照流程走
-
-    def print_info(self) -> str:
-        if self.sub_list is None or len(self.sub_list) == 0:
-            return ""
-        info_list = [f"任务信息:{self.task_info}"]
-        for task in self.sub_list:
-            info_list.append(f"    {task.id}.{task.info}------>{task.status}")
-        return "\n".join(info_list)
 
 # ============================================================================
 # agent会话数据包，包含会话信息和相关资源（会话内部独享），避免并发问题
 # ============================================================================
 
 @dataclass
-class SessionData:
-    session: Session
-    todo_manager: TodoManager = None
+class SessionCtx:
+    session: Session                            # 用户会话信息
+    # sys_prompt: str                             # 系统提示词
+    need_sub: bool = False                      # 是否需要拆分子任务
+    task_graph: TaskGraph = None                # 任务规划信息，采用有向无环图结构，后续的任务控制要依赖这个
 

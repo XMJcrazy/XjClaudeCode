@@ -2,7 +2,7 @@
 import os
 from pathlib import Path
 
-from base_comp.session import SessionData
+from base_comp.session import SessionCtx
 from base_comp.tool_base import ToolBase, ToolResp, TOOL_SUCCESS, TOOL_ERROR_AI
 
 
@@ -31,7 +31,7 @@ class ToolReadFile(ToolBase):
         self.name = "tool_read"
         self.description = "read local file info"
 
-    def execute(self, sd: SessionData, file_path: str, limit: int = None) -> ToolResp:
+    def execute(self, sd: SessionCtx, file_path: str, limit: int = None) -> ToolResp:
         text = safe_path(file_path, sd.session.white_path).read_text()
         lines = text.splitlines()
         if limit and limit < len(lines):
@@ -53,7 +53,7 @@ class ToolWriteFile(ToolBase):
         self.name = "tool_write"
         self.description = "写本地文件"
 
-    def execute(self, sd: SessionData, file_path: str, content: str) -> ToolResp:
+    def execute(self, sd: SessionCtx, file_path: str, content: str) -> ToolResp:
         fp = safe_path(file_path, sd.session.white_path)
         fp.parent.mkdir(parents=True, exist_ok=True)
         fp.write_text(content)
@@ -74,7 +74,7 @@ class ToolEditFile(ToolBase):
         self.name = "tool_edit"
         self.description = "修改本地文件"
 
-    def execute(self, sd: SessionData, file_path: str, old_text: str, new_text: str) -> ToolResp:
+    def execute(self, sd: SessionCtx, file_path: str, old_text: str, new_text: str) -> ToolResp:
         fp = safe_path(file_path, sd.session.white_path)
         content = fp.read_text()
         if old_text not in content:
