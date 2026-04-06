@@ -2,7 +2,7 @@
 import asyncio
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from base_comp.schedule import TaskGraph, MAX_SESSION_TASK
@@ -60,12 +60,18 @@ session_lock = threading.Lock()
 @dataclass
 class SessionCtx:
     session: Session                                    # 用户会话信息
-    # sys_prompt: str                                   # 系统提示词
     need_sub: bool = False                              # 是否需要拆分子任务
     task_graph: TaskGraph = None                        # 任务规划信息，采用有向无环图结构，后续的任务控制要依赖这个
-    _semaphore = asyncio.Semaphore(MAX_SESSION_TASK)    # 会话内的任务最大并发数，执行过程中不可更改
+    _semaphore: asyncio.Semaphore =field(default=None)  # 会话内的任务最大并发数，执行过程中不可更改
+
+    # 每个会话对象的信号量是独立的，但是不需要主动设置，这里用post_init方法注入
+    def __post_init__(self):
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(MAX_SESSION_TASK)
 
     @property
     def semaphore(self):
         return self._semaphore
+
+
 

@@ -1,6 +1,6 @@
 import asyncio
 
-from base_comp.ai_model import client, MODEL
+from base_comp.ai_model import async_client, MODEL
 from base_comp.prompt import PROMPT_SYS_SUB_AGENT, PROMPT_SYS_ANALYSIS, SCHEDULER_NAME, sys_task_types, \
     PROMPT_SYS_DEFAULT, get_sys_prompt, ANALYSIS_NAME, PROMPT_SYS_TASK_SCHEDULER
 from base_comp.schedule import TaskGraph, Task, MAX_SESSION_TASK
@@ -22,7 +22,6 @@ SCHEDULER_TOOLS = [ToolTaskScheduler().get_anthropic_schema()]
 # ============================================================================
 # agent会话入口，异步设计支持多会话并行
 # ============================================================================
-# 每一个会话都是一个单独的agent_loop，多个会话同时开启就是异步调用，但是会话内部逻辑都是基于同步的
 
 async def agent_loop(session_ctx: SessionCtx, messages: list):
     """
@@ -34,12 +33,12 @@ async def agent_loop(session_ctx: SessionCtx, messages: list):
     """
 
     # AI模型分析用户任务类别，获取精准的系统提示词
-    session_sys_prompt = analysis_task(session_ctx, messages)
+    session_sys_prompt = await analysis_task(session_ctx, messages)
 
     if session_ctx.need_sub:
         # 如果需要任务拆分则专门调用任务拆分工具，并进入多任务执行模式
         # 构建task_graph
-        schedule_task(session_ctx, messages)
+        await schedule_task(session_ctx, messages)
         # 等任务调度器把所有子任务执行完毕
         await _run_task_scheduler(session_ctx, messages)
         # 把所有的子任务汇总信息一起发送给大模型
@@ -48,7 +47,7 @@ async def agent_loop(session_ctx: SessionCtx, messages: list):
     # 如果有任务拆分，现在的messages已经有了所有的子任务执行摘要
     # 如果没有任务拆分，就是单任务的模式
     while True:
-        resp_msgs = client.messages.create(max_tokens=10*1024, messages=messages, model=MODEL, system=session_sys_prompt, tools=ANTHROPIC_ALL_TOOLS)
+        resp_msgs = await async_client.messages.create(max_tokens=10 * 1024, messages=messages, model=MODEL, system=session_sys_prompt, tools=ANTHROPIC_ALL_TOOLS)
 
         # 如果模型端有stop_reason信息，则进行对应的逻辑处理
         # 不是调用工具导致的stop，直接退出，任务执行完成（简单处理，还有其他几种停止类型没管，后续补上）
@@ -68,13 +67,13 @@ async def agent_loop(session_ctx: SessionCtx, messages: list):
             messages.append({"role": "user", "content": user_content})
 
 
-def analysis_task(session_ctx: SessionCtx, messages: list) -> str:
+async def analysis_task(session_ctx: SessionCtx, messages: list) -> str:
     """
     用户任务分析方法，单独发起一次AI对话，分析任务类别，判断任务复杂度
     """
     sys_prompt = PROMPT_SYS_DEFAULT
-    analysis_info = client.messages.create(max_tokens=1024, messages=messages, model=MODEL, system=PROMPT_SYS_ANALYSIS,
-                                           tools=ANALYSIS_TOOLS)
+    analysis_info = await async_client.messages.create(max_tokens=1024, messages=messages, model=MODEL, system=PROMPT_SYS_ANALYSIS,
+                                                       tools=ANALYSIS_TOOLS)
     for block in analysis_info.content:
         if block.type == "tool_use" and block.name == ANALYSIS_NAME:
             is_success, task_type = route_tool_use(block.name, session_ctx, **block.input)
@@ -87,36 +86,40 @@ def analysis_task(session_ctx: SessionCtx, messages: list) -> str:
     return sys_prompt
 
 
-def schedule_task(session_ctx: SessionCtx, sch_msg: list) -> TaskGraph | None:
+async def schedule_task(ctx: SessionCtx, sch_msg: list) -> TaskGraph | None:
     """
     任务拆分规划方法，单独发起一次AI对话，拆分用户任务并分析依赖关系
     """
     # 防止任务拆分失败，循环执行，执行成功或达到一定阈值退出循环
     while True:
-        resp_msgs = client.messages.create(max_tokens=10*1024, messages=sch_msg, model=MODEL,
-                                               system=PROMPT_SYS_TASK_SCHEDULER,tools=SCHEDULER_TOOLS)
+        resp_msgs = await async_client.messages.create(max_tokens=10 * 1024, messages=sch_msg, model=MODEL,
+                                                       system=PROMPT_SYS_TASK_SCHEDULER, tools=SCHEDULER_TOOLS)
         # 如果模型端有stop_reason信息，则进行对应的逻辑处理
         # 不是调用工具导致的stop，直接退出，任务执行完成（简单处理，还有其他几种停止类型没管，后续补上）
         if resp_msgs.stop_reason != StopReason.TOOL_USE.value:
-            if resp_msgs.stop_reason == StopReason.END_TURN.value and SessionCtx.task_graph is not None:
+            if resp_msgs.stop_reason == StopReason.END_TURN.value and ctx.task_graph is not None:
+                # 任务拆分完成，打印任务信息
                 print(f"SCHEDULE TASK FINISHED!")
-                return SessionCtx.task_graph
+                ctx.task_graph.print_graph()
+                break
+            elif resp_msgs.stop_reason == StopReason.END_TURN.value:
+                print(f"SCHEDULE TASK ERROR! ctx task graph is none")
             else:
                 print(f"SCHEDULE TASK STOP!  reason:{resp_msgs.stop_reason} \n content:{resp_msgs.content}")
                 return None
 
         sch_msg.append({"role": "assistant", "content": resp_msgs.content})
         # 调用统一的AI模型返回信息处理方法
-        user_content = handle_resp_content(session_ctx, resp_msgs.content)
+        user_content = handle_resp_content(ctx, resp_msgs.content)
         # len > 0 说明本轮次有用户端信息，一并发送回AI端
         if len(user_content) > 0:
             sch_msg.append({"role": "user", "content": user_content})
 
 
-def handle_resp_content(sd: SessionCtx, content: list) -> list:
+def handle_resp_content(ctx: SessionCtx, content: list) -> list:
     """
     统一处理AI模型返回信息的方法
-    :param sd       会话上下文信息
+    :param ctx       会话上下文信息
     :param content  模型原始返回信息
     """
     # results存放本轮次返回信息的用户端的处理情况
@@ -131,7 +134,7 @@ def handle_resp_content(sd: SessionCtx, content: list) -> list:
                 print(f"thinking...  {block.thinking[:1000]}..." if len(block.thinking) > 1000 else f"thinking... {block.thinking}")
             case "tool_use":
                 # 获取模型端返回的工具调用信息
-                _, tool_resp = route_tool_use(block.name, sd, **block.input)
+                _, tool_resp = route_tool_use(block.name, ctx, **block.input)
                 # 工具调用信息
                 user_content.append({"type": "tool_result", "tool_use_id": block.id, "content": tool_resp})
                 print(f"TOOL RESP：{tool_resp[:1000] if len(tool_resp) > 1000 else tool_resp}")
@@ -194,11 +197,10 @@ async def _run_task_scheduler(ctx: SessionCtx, main_massage: list):
 async def _sub_task_worker(session_ctx: SessionCtx, task: Task, ctx_lock: asyncio.Lock, event: asyncio.Event, main_massage: list):
     """
     任务基本执行单元
-    :param session_ctx:
-    :param task:
-    :param ctx_lock:
-    :param main_massage:
-    :return:
+    :param session_ctx: 会话上下文
+    :param task: 任务信息
+    :param ctx_lock: 会话锁，会话级别的共享变量需要用这个锁来控制
+    :param main_massage: 和大模型的主对话上下文
     """
     # 控制子任务的并发数
     async with session_ctx.semaphore:
@@ -210,8 +212,9 @@ async def _sub_task_worker(session_ctx: SessionCtx, task: Task, ctx_lock: asynci
 
         # 单任务内部循环执行，收到LLM的停止消息再跳出循环
         while True:
-            resp_msgs = client.messages.create(max_tokens=10 * 1024, messages=messages, model=MODEL, system=PROMPT_SYS_SUB_AGENT,
-                                               tools=ANTHROPIC_ALL_TOOLS)
+            resp_msgs = await async_client.messages.create(max_tokens=10 * 1024, messages=messages, model=MODEL, system=PROMPT_SYS_SUB_AGENT,
+                                                           tools=ANTHROPIC_ALL_TOOLS)
+
             # messages要保存所有的历史信息
             messages.append({"role": "assistant", "content": resp_msgs.content})
 

@@ -81,22 +81,3 @@ class ToolTaskScheduler(ToolBase):
             },
             "required": ["summary", "map_info", "deps"]
         }
-
-
-
-class ToolSubAgent(ToolBase):
-    def __init__(self):
-        self.name = "sub_agent"
-        self.description = "create sub agent with given prompt"
-
-    def execute(self) -> ToolResp:
-       pass
-
-    def _get_input_schema(self) -> dict:
-        return {
-            "type": "object",
-            "properties": {
-                "file_path": {"type": "string", "description": "full path to the file"},
-            },
-            "required": ["file_path", "limit"],
-        }

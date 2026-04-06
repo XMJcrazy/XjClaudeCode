@@ -140,15 +140,30 @@ class TaskGraph:
                     return False
         return True
 
+    def print_graph(self) -> None:
+        """打印任务图"""
+        print(f"\n{'=' * 60}")
+        print(f"TaskGraph: {self.summary}")
+        print(f"Progress: {self.completed}/{self.num} tasks completed")
+        print(f"{'=' * 60}")
+        if not self._tasks:
+            print("  (empty)")
+            return
+        for task_id, task in self._tasks.items():
+            status_icon = "✓" if task.state == TaskState.COMPLETED else "○" if task.state == TaskState.PENDING else "◐"
+            deps = f" [depends on: {', '.join(task.dependencies)}]" if task.dependencies else ""
+            print(f"  {status_icon} [{task_id}] {task.prompt[:50]}{'...' if len(task.prompt) > 50 else ''}{deps}")
+        print(f"{'=' * 60}\n")
+
     @classmethod
-    def from_dict(cls, summary: str, map_info: dict[str, str], data: Dict[str, List[str]]) -> "TaskGraph":
+    def from_dict(cls, summary: str, map_info: dict[str, str], deps: Dict[str, List[str]]) -> "TaskGraph":
         """
         从字典创建TaskGraph对象
         字典格式：{任务id: [依赖的id列表]} 例如：{"1": [], "2": ["1"], "3": ["1"], "4": ["1", "2"], "5": ["3"]}
         Args:
             summary: 总的任务摘要
             map_info: id -> prompt 映射关系
-            data: 任务依赖字典
+            deps: 任务依赖字典
         Returns:
             TaskGraph: 创建的任务图对象
         Raises:
@@ -157,15 +172,15 @@ class TaskGraph:
         graph_data = cls(summary)
 
         # 遍历字典，添加所有任务
-        for id, deps in data.items():
+        for id, dep in deps.items():
             if id not in map_info:
                 raise ValueError("无效的任务图：存在无效的任务id")
-            graph_data.add_task(id, map_info[id], deps)
+            graph_data.add_task(id, map_info[id], dep)
 
         # 检查图的合法性
         if not graph_data.is_valid():
             raise ValueError(f"无效的任务图：必须满足有起点、无环、所有依赖均存在且task数量 <= {MAX_NUM}")
-        graph_data.num = len(data)
+        graph_data.num = len(deps)
         return graph_data
 
     def get_task(self, id: str) -> Optional[Task]:
@@ -211,6 +226,7 @@ class TaskGraph:
             raise ValueError(f"任务 '{id}' 必须处于运行状态才能标记为完成")
 
         task.state = TaskState.COMPLETED
+        self.completed += 1
 
     def can_execute(self, id: str) -> bool:
         """
@@ -275,6 +291,8 @@ if __name__ == "__main__":
     map = {"1":"task1", "2":"task2", "3":"task3", "4":"task4", "5":"task5"}
     # 从字典创建任务图
     graph = TaskGraph.from_dict("总任务", map, data)
+
+    graph.print_graph()
     print(f"图是否合法: {graph.is_valid()}")
     print(f"所有任务: {graph.get_all_tasks()}")
     print(f"可执行任务: {graph.get_executable_tasks()}")
