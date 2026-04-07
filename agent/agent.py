@@ -237,51 +237,6 @@ async def handle_resp_content(ctx: SessionCtx, content: list) -> list:
                 print("thinking... [内容已隐藏]")
     return user_content
 
-
-async def _run_task_scheduler(ctx: SessionCtx, main_massage: list, event: asyncio.Event):
-    """
-    任务调度中心
-    :param ctx: 任务总的上下文
-    :param main_massage: 主任务AI模型上下文
-    :param event: 协程触发事件，类似golang的通道，触发式的协程并发控制
-    """
-
-
-    tasks = ctx.task_graph.get_executable_tasks()
-
-    # 并发执行任务
-    async with asyncio.TaskGroup() as tg:
-        for task in tasks:
-            # 修改任务的状态为执行中
-            async with ctx.ctx_lock:
-                ctx.task_graph.set_running(task.id)
-                # 开启一个并发的执行协程
-                tg.create_task(_sub_task_worker(ctx, task, event, main_massage))
-
-        # 循环接收新的任务, event 由任务执行端触发
-        while True:
-            await event.wait()
-            async with ctx.ctx_lock:
-                # 所有任务都完成直接跳出
-                if ctx.task_graph.is_all_completed():
-                    break
-                add_tasks = ctx.task_graph.get_executable_tasks()
-                # 已经完成了可执行任务的获取，重置event标记
-                event.clear()
-
-            if add_tasks:
-                # 存在新解锁的任务，直接并发执行
-                # 加锁改变任务状态为运行中
-                async with ctx_lock:
-                    for task in add_tasks:
-                        tg.create_task(_sub_task_worker(ctx, task, ctx_lock, event, main_massage))
-                        ctx.task_graph.set_running(task.id)
-
-    # 所有子任务都完成了，添加相关提示
-    main_massage.append({"role": "user", "content": "<reminder>All sub task completed. Please check it!</reminder>"})
-
-
-
 async def _sub_task_worker(ctx: SessionCtx, task: Task, event: asyncio.Event, main_massage: list):
     """
     任务基本执行单元
