@@ -1,7 +1,7 @@
 """
 任务调度、管理、编排基础模块
 """
-
+import dataclasses
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional
@@ -155,6 +155,23 @@ class TaskGraph:
             print(f"  {status_icon} [{task_id}] {task.prompt[:50]}{'...' if len(task.prompt) > 50 else ''}{deps}")
         print(f"{'=' * 60}\n")
 
+    def to_dict(self) -> dict:
+        """把当前任务状态转化成通用字典格式，方便同步给模型端"""
+        return {
+            "summary": self.summary,
+            "num": self.num,
+            "completed": self.completed,
+            "tasks": {
+                task_id: {
+                    "id": task.id,
+                    "prompt": task.prompt,
+                    "dependencies": task.dependencies,
+                    "state": task.state.value,  # Enum 转字符串
+                }
+                for task_id, task in self._tasks.items()
+            }
+        }
+
     @classmethod
     def from_dict(cls, summary: str, map_info: dict[str, str], deps: Dict[str, List[str]]) -> "TaskGraph":
         """
@@ -162,7 +179,7 @@ class TaskGraph:
         字典格式：{任务id: [依赖的id列表]} 例如：{"1": [], "2": ["1"], "3": ["1"], "4": ["1", "2"], "5": ["3"]}
         Args:
             summary: 总的任务摘要
-            map_info: id -> prompt 映射关系
+            map_info: id -> config 映射关系
             deps: 任务依赖字典
         Returns:
             TaskGraph: 创建的任务图对象
@@ -185,7 +202,7 @@ class TaskGraph:
 
     def get_task(self, id: str) -> Optional[Task]:
         """
-        根据名称获取任务
+        根据id获取任务
         Args:
             id: 任务id
         Returns:
@@ -193,14 +210,15 @@ class TaskGraph:
         """
         return self._tasks.get(id)
 
+    def set_pending(self, id: str):
+        """将任务设置为等待状态"""
+        task = self._tasks.get(id)
+        if not task:
+            raise ValueError(f"任务 '{id}' 不存在")
+        task.state = TaskState.PENDING
+
     def set_running(self, id: str):
-        """
-        将任务设置为运行状态
-        Args:
-            id: 任务id
-        Raises:
-            ValueError: 如果任务不存在或不可执行
-        """
+        """将任务设置为运行状态"""
         task = self._tasks.get(id)
         if not task:
             raise ValueError(f"任务 '{id}' 不存在")
@@ -211,13 +229,7 @@ class TaskGraph:
         task.state = TaskState.RUNNING
 
     def set_completed(self, id: str):
-        """
-        将任务设置为完成状态
-        Args:
-            id: 任务名称
-        Raises:
-            ValueError: 如果任务不存在或当前不是运行状态
-        """
+        """将任务设置为完成状态"""
         task = self._tasks.get(id)
         if not task:
             raise ValueError(f"任务 '{id}' 不存在")
@@ -293,6 +305,7 @@ if __name__ == "__main__":
     graph = TaskGraph.from_dict("总任务", map, data)
 
     graph.print_graph()
+    print(graph.to_dict())
     print(f"图是否合法: {graph.is_valid()}")
     print(f"所有任务: {graph.get_all_tasks()}")
     print(f"可执行任务: {graph.get_executable_tasks()}")

@@ -4,10 +4,9 @@
 """
 import json
 
-PROMPT_CONFIG = "prompt/prompt_template.json"
-
 ANALYSIS_NAME = "task_analysis"
 SCHEDULER_NAME = "task_scheduler"
+TASK_SYNC = "task_sync"
 
 # 任务类别，由AI模型来判断，不同类别对应不同系统提示词
 # 目前支持下面的类别-编程、系统设计、私人助手、聊天机器人、任务规划、文档总结、网络搜索
@@ -15,7 +14,7 @@ SCHEDULER_NAME = "task_scheduler"
 sys_task_types = ["coding", "system design", "personal assistant", "chat robot", "task schedule", "doc summary", "web search"]
 
 # 加载配置文件,初始化部分系统提示词
-with open(PROMPT_CONFIG, "r") as f:
+with open("config/prompt_template.json", "r") as f:
     sys_conf = json.load(f)
 
 # 解决用户的问题之间会分析玩家问题种类，根据种类再调用对应的agent
@@ -61,6 +60,16 @@ def get_sys_prompt(task_type: str) -> str:
 # 补充提示词
 # ============================================================================
 
-# 摘要提示补充，一般用于压缩上下文
-PROMPT_SUMMARY = " PS:Complete the given task,summarize your findings."
+# 子任务摘要提示补充，一般用于压缩上下文
+PROMPT_SUB_SUMMARY = " PS:Complete the given task,summarize your findings."
+# 任务监控的补充提示词，主任务system要加上这一段确保实时监控子任务进展、验收子任务执行结果
+PROMPT_TASK_MONITOR = f"""
+    <>
+    You are an agent for task scheduling and monitoring. 
+    After other agents complete the sub-tasks, they will summarize the execution results of the sub-tasks and put them into your context.
+    When sub task finish just check it, don't need solve it.
+    Use tool:{TASK_SYNC} tell user the check result.
+    Only all sub task finished,you can send stop_reason.
+    </>
+"""
 

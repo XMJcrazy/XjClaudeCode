@@ -32,7 +32,7 @@ class ToolBaseScript(ToolBase):
             }
         """
 
-    def execute(self, session_data: SessionCtx, command: str, work_dir: str, args: list[str], files: list[str]) -> ToolResp:
+    async def execute(self, session_data: SessionCtx, command: str, work_dir: str, args: list[str], files: list[str]) -> ToolResp:
         """基础脚本执行工具"""
         if session_data is None or session_data.session is None:
             return ToolResp(TOOL_ERROR_AI, "Error: param session illegal")
@@ -47,7 +47,7 @@ class ToolBaseScript(ToolBase):
         try:
             cmd_str = f"{command}  {" ".join(args)}  {" ".join(files)}"
             r = subprocess.run(cmd_str, shell=True, cwd=work_dir,
-                               capture_output=True, text=True, timeout=60)
+                               capture_output=True, text=True, timeout=600)
             out = (r.stdout + r.stderr).strip()
             return ToolResp(TOOL_SUCCESS, out[:50000] if out else "no output")
         except subprocess.TimeoutExpired:

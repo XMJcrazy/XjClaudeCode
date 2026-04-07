@@ -101,7 +101,7 @@ class WebFetchToolBase(ToolBase):
         }
 
 
-    def execute(self, *args, url: str, format: str = "text", timeout: int = 30) -> ToolResp:
+    async def execute(self, *args, url: str, format: str = "text", timeout: int = 30) -> ToolResp:
         """执行网页获取，返回 ToolResp 对象"""
         # 验证 URL
         valid, error_msg = validate_url(url)
@@ -112,12 +112,12 @@ class WebFetchToolBase(ToolBase):
         timeout = min(timeout, 120)
 
         try:
-            with httpx.Client(
+            async with httpx.AsyncClient(
                     timeout=httpx.Timeout(timeout),
                     follow_redirects=True,
                     headers={"User-Agent": self.user_agent}
             ) as client:
-                response = client.get(url)
+                response = await client.get(url)
                 response.raise_for_status()
 
                 # 检查响应大小
@@ -327,7 +327,7 @@ class CodeSearchToolBase(ToolBase):
 
         return "\n".join(output)
 
-    def execute(
+    async def execute(
             self,
             *args,
             query: str,
@@ -349,13 +349,13 @@ class CodeSearchToolBase(ToolBase):
         graphql_query = self._build_graphql_query(query, count, context_lines)
 
         try:
-            with httpx.Client(
+            async with httpx.AsyncClient(
                     timeout=httpx.Timeout(timeout),
                     headers={
                         "User-Agent": self.user_agent,
                     }
             ) as client:
-                response = client.post(
+                response = await client.post(
                     self.GRAPHQL_URL,
                     json=graphql_query
                 )

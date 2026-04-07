@@ -30,7 +30,7 @@ class ToolBase(ABC):
     description: str
 
     @abstractmethod
-    def execute(self, *args, **kwargs) -> ToolResp:
+    async def execute(self, *args, **kwargs) -> ToolResp:
         """
         调用tool的具体逻辑，由具体的实现类完成
         :param args: agent内部传递的参数，目前只有session，后面如果有就往后添加

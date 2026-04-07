@@ -63,15 +63,22 @@ class SessionCtx:
     need_sub: bool = False                              # 是否需要拆分子任务
     task_graph: TaskGraph = None                        # 任务规划信息，采用有向无环图结构，后续的任务控制要依赖这个
     _semaphore: asyncio.Semaphore =field(default=None)  # 会话内的任务最大并发数，执行过程中不可更改
+    _ctx_lock: threading.Lock = field(default=None)     # 会话上下文的公用锁，用来控制并发场景下session的读写安全
 
-    # 每个会话对象的信号量是独立的，但是不需要主动设置，这里用post_init方法注入
+    # 每个会话对象的信号量和公共锁是独立的，但是不需要主动设置，这里用post_init方法注入
     def __post_init__(self):
         if self._semaphore is None:
             self._semaphore = asyncio.Semaphore(MAX_SESSION_TASK)
+        if self._ctx_lock is None:
+            self._ctx_lock = threading.Lock()
 
+    # 下面的属性是只读的，避免被更改
     @property
     def semaphore(self):
         return self._semaphore
 
+    @property
+    def ctx_lock(self):
+        return self._ctx_lock
 
 

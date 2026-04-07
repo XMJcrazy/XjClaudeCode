@@ -31,7 +31,7 @@ def remove_tool(tool: ToolBase):
     del my_tools[tool.name]
     mutex.release()
 
-def route_tool_use(tool_name: str, ctx: SessionCtx, **kwargs):
+async def route_tool_use(tool_name: str, ctx: SessionCtx, **kwargs):
     """
     接收大模型的工具调用请求并路由到具体的方法
     :param ctx: 会话上下文，有些工具要调用会话中的内容
@@ -45,7 +45,7 @@ def route_tool_use(tool_name: str, ctx: SessionCtx, **kwargs):
     else:
         try:
             print(f"PREPARE USE TOOL:{tool_name} with args:{kwargs}")
-            resp = tool.execute(ctx, **kwargs)
+            resp = await asyncio.wait_for(tool.execute(ctx, **kwargs), 600)
         except asyncio.TimeoutError:
             # TODO超时要做指数退阶的重试，这里先简单处理
             return False, f"Error:timeout with tool:{tool_name}"
@@ -55,7 +55,7 @@ def route_tool_use(tool_name: str, ctx: SessionCtx, **kwargs):
             return False, str(e)
 
         if resp.status_code == TOOL_SUCCESS:
-            return True, resp.content
+            return True, resp.content, resp.tool_obj
         return False, f"tool:{tool_name}\nError:{resp.content}"
 
 
