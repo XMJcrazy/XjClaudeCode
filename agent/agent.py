@@ -1,6 +1,6 @@
 import asyncio
 
-from base_comp.ai_model import async_client, MODEL
+from base_comp.ai_model import async_client, MODEL, create_anthropic_message
 from base_comp.prompt import PROMPT_SYS_SUB_AGENT, PROMPT_SYS_ANALYSIS, \
     PROMPT_SYS_DEFAULT, get_sys_prompt, ANALYSIS_NAME, PROMPT_SYS_TASK_SCHEDULER, PROMPT_TASK_MONITOR, TASK_SYNC
 from base_comp.schedule import TaskGraph, Task
@@ -13,10 +13,12 @@ from tools import register_tools, ToolTaskAnalysis, ToolTaskScheduler
 # 注册tools方法
 register_tools()
 
-# 主agent的各类可用工具信息（目前仅兼容anthropic标准，后续扩展其他标准）
+# 主工具集，避免任务不断做分析和拆分，分析和拆分的工具不在主工具集里面
 ANTHROPIC_ALL_TOOLS = get_tools_for_anthropic()
+# 分析工具集
 ANALYSIS_TOOLS = [ToolTaskAnalysis().get_anthropic_schema()]
-SCHEDULER_TOOLS = [ToolTaskScheduler().get_anthropic_schema()]
+# 任务拆解工具集 = 主工具集 + 任务拆解工具集
+SCHEDULER_TOOLS = [ToolTaskScheduler().get_anthropic_schema()] + ANTHROPIC_ALL_TOOLS
 
 
 # ============================================================================
@@ -33,12 +35,36 @@ async def agent_loop(ctx: SessionCtx, messages: list):
     """
 
     # AI模型分析用户任务类别，获取精准的系统提示词
-    session_sys_prompt = await analysis_task(ctx, messages)
+    print("START ANALYSIS TASK...")
+    session_sys_prompt, need_schedule = await analysis_task(ctx, messages)
 
-    if ctx.need_sub:
-        # 如果需要任务拆分则专门调用任务拆分工具，并进入多任务执行模式
-        # 构建task_graph
+    if need_schedule:
+        # 先进行任务拆分
+        print("START SCHEDULE TASK...")
         await schedule_task(ctx, messages)
+
+        # 任务触发器，主任务子任务共享，子任务完成，跨协程通知主任务
+        event = asyncio.Event()
+
+        # 主任务添加 [任务监控，子任务完成度检查] 相关的系统提示词补充
+        session_sys_prompt = session_sys_prompt + PROMPT_TASK_MONITOR
+        # 添加开始监听子任务的用户消息
+        messages.append({"role": "user", "content": [
+            {"type": "text",
+             "text": f"开始监控子任务完成状态，子任务完成之后会通知你，你负责验收就行，我会根据你的验收结果让子任务的agent执行修复"},
+            # {"type": "text", "text": f"子任务开始执行，当前任务执行状态为-->{ctx.task_graph.to_dict()}"},
+        ]})
+
+        # 第一轮对话发送开始监听子任务的消息
+        is_ok, resp_msgs = await create_anthropic_message(max_tokens=10 * 1024, messages=messages, model=MODEL, system=session_sys_prompt, tools=ANTHROPIC_ALL_TOOLS)
+        if not is_ok:
+            print(f"TASK Error:{resp_msgs}")
+            return
+
+        messages.append({"role": "assistant", "content": resp_msgs.content})
+        user_context = await handle_resp_content(ctx, resp_msgs.content)
+        if len(user_context) > 0:
+            messages.append({"role": "user", "content": user_context})
 
         # ================================================================================
         # * 所有的子任务都是单独的模型对话，彼此独立，部分并发执行，提升整体效率
@@ -48,26 +74,6 @@ async def agent_loop(ctx: SessionCtx, messages: list):
         # * 任务状态监控，回退、重试等功能后面版本继续完善
         # ================================================================================
         async with asyncio.TaskGroup() as tg:
-            # 任务触发器，主任务子任务共享，子任务完成，跨协程通知主任务
-            event = asyncio.Event()
-
-            # 主任务添加 [任务监控，子任务完成度检查] 相关的系统提示词补充
-            session_sys_prompt = session_sys_prompt + PROMPT_TASK_MONITOR
-            # 添加开始监听子任务的用户消息
-            messages.append({"role": "user", "content": {[
-                {"type": "text", "text": f"开始监控子任务完成状态，子任务完成之后会通知你，你负责验收就行，我会根据你的验收结果让子任务的agent执行修复"},
-                # {"type": "text", "text": f"子任务开始执行，当前任务执行状态为-->{ctx.task_graph.to_dict()}"},
-            ]}})
-
-            # 主任务开启专门的模型对话，和子任务的上下文进行隔离
-            # 第一次会话发送开始监听子任务的消息
-            resp_msgs = await async_client.messages.create(max_tokens=10 * 1024, messages=messages, model=MODEL,
-                                                           system=session_sys_prompt, tools=ANTHROPIC_ALL_TOOLS)
-            messages.append({"role": "assistant", "content": resp_msgs.content})
-            user_context = await handle_resp_content(ctx,resp_msgs.content)
-            if len(user_context) > 0:
-                messages.append({"role": "user", "content": user_context})
-
             # 异步启动所有可执行子任务，和主任务并发执行
             async with ctx.ctx_lock:
                 add_tasks = ctx.task_graph.get_executable_tasks()
@@ -82,8 +88,11 @@ async def agent_loop(ctx: SessionCtx, messages: list):
             while True:
                 await event.wait()
                 # 主任务重新开始和大模型对话
-                resp_msgs = await async_client.messages.create(max_tokens=10 * 1024, messages=messages, model=MODEL,
-                                                               system=session_sys_prompt, tools=ANTHROPIC_ALL_TOOLS)
+                is_ok, resp_msgs = await create_anthropic_message(max_tokens=10 * 1024, messages=messages, model=MODEL, system=session_sys_prompt, tools=ANTHROPIC_ALL_TOOLS)
+                if not is_ok:
+                    print(f"TASK Error:{resp_msgs}")
+                    break
+
                 messages.append({"role": "assistant", "content": resp_msgs.content})
                 async with ctx.ctx_lock:
                     # 主任务结束
@@ -141,7 +150,10 @@ async def agent_loop(ctx: SessionCtx, messages: list):
     else:
         # 没有任务拆分就直接走单任务模式
         while True:
-            resp_msgs = await async_client.messages.create(max_tokens=10 * 1024, messages=messages, model=MODEL, system=session_sys_prompt, tools=ANTHROPIC_ALL_TOOLS)
+            is_ok, resp_msgs = await create_anthropic_message(max_tokens=10 * 1024, messages=messages, model=MODEL, system=session_sys_prompt, tools=ANTHROPIC_ALL_TOOLS)
+            if not is_ok:
+                print(f"TASK Error:{resp_msgs}")
+                break
 
             # 如果模型端有stop_reason信息，则进行对应的逻辑处理
             # 不是调用工具导致的stop，直接退出，任务执行完成（简单处理，还有其他几种停止类型没管，后续补上）
@@ -161,23 +173,28 @@ async def agent_loop(ctx: SessionCtx, messages: list):
                 messages.append({"role": "user", "content": user_content})
 
 
-async def analysis_task(session_ctx: SessionCtx, messages: list) -> str:
+async def analysis_task(session_ctx: SessionCtx, messages: list) -> tuple[str, bool]:
     """
     用户任务分析方法，单独发起一次AI对话，分析任务类别，判断任务复杂度
     """
-    sys_prompt = PROMPT_SYS_DEFAULT
-    analysis_info = await async_client.messages.create(max_tokens=1024, messages=messages, model=MODEL, system=PROMPT_SYS_ANALYSIS,
-                                                       tools=ANALYSIS_TOOLS)
-    for block in analysis_info.content:
-        if block.type == "tool_use" and block.name == ANALYSIS_NAME:
-            is_success, task_type = await route_tool_use(block.name, session_ctx, **block.input)
-            # 根据分析的类别注入更精准的提示词，ANALYSIS工具获取了分析结果直接返回
-            if is_success:
-                sys_prompt = get_sys_prompt(task_type)
-                return sys_prompt
-    # 如果分析失败就返回默认提示词
-    # 这里不把返回信息加入messages，避免污染主任务上下文
-    return sys_prompt
+    # 构造新的模型上下文，不污染主任务上下文
+    analysis_msgs = [{"role":"user", "content":["分析下面任务的任务类别并判断是否需要进行任务拆分"]}] + messages
+    for _ in range(10):
+        # 为了避免单次分析失败，加入循环确认，最多交互十次（后面可以根据实际情况调整），超过十次还没解决就用默认agent类别
+        is_ok, analysis_info = await create_anthropic_message(max_tokens=1024, messages=messages, model=MODEL, system=PROMPT_SYS_ANALYSIS, tools=ANALYSIS_TOOLS)
+        if not is_ok: break
+
+        for block in analysis_info.content:
+            if block.type == "tool_use" and block.name == ANALYSIS_NAME:
+                is_success, tool_resp, rsp_obj = await route_tool_use(block.name, session_ctx, **block.input)
+                # 根据分析的类别注入更精准的提示词，ANALYSIS工具获取了分析结果直接返回
+                if is_success:
+                    return get_sys_prompt(rsp_obj), rsp_obj.get("need_schedule")
+                else:
+                    analysis_msgs.append({"type":"user", "content": [{"type": "tool_result", "tool_use_id": block.id, "content": tool_resp}]})
+
+    # 分析失败，返回默认提示词
+    return PROMPT_SYS_DEFAULT, False
 
 
 async def schedule_task(ctx: SessionCtx, messages: list) -> TaskGraph | None:
@@ -186,8 +203,14 @@ async def schedule_task(ctx: SessionCtx, messages: list) -> TaskGraph | None:
     """
     # 防止任务拆分失败，循环执行，执行成功或达到一定阈值退出循环
     while True:
-        resp_msgs = await async_client.messages.create(max_tokens=10 * 1024, messages=messages, model=MODEL,
+        if ctx.task_graph is not None and ctx.task_graph.is_valid():
+            # 这个方法只做任务拆解，拆解完成之后直接退出大模型交互循环
+            ctx.task_graph.print_graph()
+            break
+        is_ok, resp_msgs = await create_anthropic_message(max_tokens=10 * 1024, messages=messages, model=MODEL,
                                                        system=PROMPT_SYS_TASK_SCHEDULER, tools=SCHEDULER_TOOLS)
+        if not is_ok: break
+
         # 如果模型端有stop_reason信息，则进行对应的逻辑处理
         # 不是调用工具导致的stop，直接退出，任务执行完成（简单处理，还有其他几种停止类型没管，后续补上）
         if resp_msgs.stop_reason != StopReason.TOOL_USE.value:
@@ -228,7 +251,7 @@ async def handle_resp_content(ctx: SessionCtx, content: list) -> list:
                 print(f"thinking...  {block.thinking[:1000]}..." if len(block.thinking) > 1000 else f"thinking... {block.thinking}")
             case "tool_use":
                 # 获取模型端返回的工具调用信息
-                _, tool_resp = await route_tool_use(block.name, ctx, **block.input)
+                _, tool_resp, _ = await route_tool_use(block.name, ctx, **block.input)
                 # 工具调用信息
                 user_content.append({"type": "tool_result", "tool_use_id": block.id, "content": tool_resp})
                 print(f"TOOL RESP：{tool_resp[:1000] if len(tool_resp) > 1000 else tool_resp}")
@@ -247,15 +270,20 @@ async def _sub_task_worker(ctx: SessionCtx, task: Task, event: asyncio.Event, ma
     # 控制子任务的并发数
     async with ctx.semaphore:
 
-        # main_massage是主任务的全局信息，包含了目前所有已经完成的子任务执行结果摘要
-        # 以主任务全局信息为基底加上当前任务的prompt，构建新的模型对话
+        # task_status是全局任务信息，包含了目前所有的子任务执行状态
+        # 子任务是独立的messages，和主任务分开
         # 这样当前任务的上下文不会污染主任务上下文，并且当前任务也获得了充足的前置信息
-        messages = main_massage + [{"role": "user", "content": task.prompt}]
+        async with ctx.ctx_lock:
+            task_status = ctx.task_graph.to_dict()
+        messages = [
+            {"role": "user", "content": task.prompt},
+            {"role": "user", "content": f"你负责的任务id是：{task.id}，目前全部的任务执行状态如下：{task_status}"},
+        ]
 
         # 单任务内部循环执行，收到LLM的停止消息再跳出循环
         while True:
-            resp_msgs = await async_client.messages.create(max_tokens=10 * 1024, messages=messages, model=MODEL, system=PROMPT_SYS_SUB_AGENT,
-                                                           tools=ANTHROPIC_ALL_TOOLS)
+            is_ok, resp_msgs = await create_anthropic_message(max_tokens=10 * 1024, messages=messages, model=MODEL, system=PROMPT_SYS_SUB_AGENT, tools=ANTHROPIC_ALL_TOOLS)
+            if not is_ok: break
 
             # messages要保存所有的历史信息
             messages.append({"role": "assistant", "content": resp_msgs.content})

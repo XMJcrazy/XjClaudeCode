@@ -41,22 +41,22 @@ async def route_tool_use(tool_name: str, ctx: SessionCtx, **kwargs):
     """
     tool = my_tools[tool_name]
     if tool is None:
-        return False, f"tool not found:{tool_name}"
+        return False, f"tool not found:{tool_name}", None
     else:
         try:
             print(f"PREPARE USE TOOL:{tool_name} with args:{kwargs}")
             resp = await asyncio.wait_for(tool.execute(ctx, **kwargs), 600)
         except asyncio.TimeoutError:
             # TODO超时要做指数退阶的重试，这里先简单处理
-            return False, f"Error:timeout with tool:{tool_name}"
+            return False, f"Error:timeout with tool:{tool_name}", None
         except TypeError as e:
-            return False, str(e)
+            return False, str(e), None
         except Exception as e:
-            return False, str(e)
+            return False, str(e), None
 
         if resp.status_code == TOOL_SUCCESS:
             return True, resp.content, resp.tool_obj
-        return False, f"tool:{tool_name}\nError:{resp.content}"
+        return False, f"tool:{tool_name}\nError:{resp.content}", None
 
 
 def get_tools_for_anthropic() -> list[dict]:

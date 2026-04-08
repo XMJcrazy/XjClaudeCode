@@ -11,8 +11,15 @@ from base_comp.schedule import TaskGraph
 from base_comp.session import Session, SessionCtx
 
 if __name__ == '__main__':
-    output = "/Users/xingjun/Documents/data/doc"
-    task1 = f"基于slg游戏玩法，编写一个符合actor设计模式的，用golang编写{output}"
+    output = "/Users/xingjun/PycharmProjects/Pacman"
+    task1 = f"""模仿这个网页：https://game.haiyong.site/dou.html 写一个同款的网页小游戏，用Typescript语言实现，项目写在:{output}路径下。具体要求如下：
+            1.纯前端项目，本地开箱既玩。
+            2.项目要有架构文档和设计说明，
+            3.相关的素材贴图直接用这个网站的，如果下不下来，就自己去找类似的吃豆人素材
+            4.代码要以模块的形式组织，确保项目的可读性
+            5.所有的模块都要有详尽的测试，确保功能没bug
+            6.项目完成之后，在项目根路径下写一个README.md文件，总结开发过程的痛点和卡点
+    """
 
     messages = [
         {"role":"user", "content":task1},
@@ -22,6 +29,6 @@ if __name__ == '__main__':
     session = Session(name="test_chat", root_path=output)
 
     # 开始循环执行任务
-    print("start tasks ...")
+    print("START TASK ...")
     asyncio.run(agent_loop(SessionCtx(session), messages))
 

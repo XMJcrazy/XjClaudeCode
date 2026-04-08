@@ -43,11 +43,9 @@ class TaskGraph:
     def add_task(self, id: str, name: str, dependencies: List[str] = None):
         """
         添加一个任务节点到图中
-
-        Args:
-            id: 任务id
-            name: 任务具体内容
-            dependencies: 该任务依赖的任务名称列表
+        :param: id: 任务id
+        :param: name: 任务具体内容
+        :param: dependencies: 该任务依赖的任务名称列表
         Raises:
             ValueError: 如果任务已存在或依赖的任务不存在
         """
@@ -191,7 +189,7 @@ class TaskGraph:
         # 遍历字典，添加所有任务
         for id, dep in deps.items():
             if id not in map_info:
-                raise ValueError("无效的任务图：存在无效的任务id")
+                raise ValueError("无效的任务图：存在无效的任务id，deps里面的所有任务id必须在map_info中")
             graph_data.add_task(id, map_info[id], dep)
 
         # 检查图的合法性

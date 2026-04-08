@@ -18,8 +18,7 @@ class ToolTaskAnalysis(ToolBase):
     async def execute(self, ctx: SessionCtx, task_type: str, need_schedule: bool = False) -> ToolResp:
         if task_type not in sys_task_types:
             return ToolResp(TOOL_ERROR_AI, f"illegal task_type，task_type must in {sys_task_types}")
-        ctx.need_sub = need_schedule
-        return ToolResp(TOOL_SUCCESS, task_type)
+        return ToolResp(tool_obj={"task_type": task_type, "need_schedule": need_schedule})
 
     def _get_input_schema(self) -> dict:
         return {
@@ -38,12 +37,12 @@ class ToolTaskScheduler(ToolBase):
     """
     def __init__(self):
         self.name = SCHEDULER_NAME
-        self.description = "同步用户任务的拆解信息，包含任务拆解、任务依赖。整体结构为有向无环图"
+        self.description = """
+            同步用户任务的拆解信息，包含任务拆解、任务依赖。
+            整体结构为有向无环图，必须至少有一个起点，起点没有前置任务。
+        """
 
     async def execute(self, ctx: SessionCtx, summary: str, map_info: dict[str, str], deps: dict[str, list[str]]) -> ToolResp:
-        # 前置验证
-        if not ctx.need_sub:
-            return ToolResp(TOOL_ERROR_AI, "simple task don't require split")
         if ctx.task_graph is not None:
             return ToolResp(TOOL_ERROR_AI, "task_graph has already been created")
 
@@ -75,7 +74,7 @@ class ToolTaskScheduler(ToolBase):
                             "type": "string"
                         }
                     },
-                    "description": "任务依赖关系，key是任务id，value是依赖的任务列表id，至少存在一个无前置依赖的任务",
+                    "description": "任务依赖关系，所有任务都必须在里面（包括无前置依赖的任务），key是任务id，value是它依赖的任务id列表（无依赖的任务则value=[]），至少存在一个无依赖id的任务",
                     "examples": [{"a": [], "b": ["a"], "c": ["a", "b"]}]
                 }
             },
