@@ -16,7 +16,7 @@ TASK_SYNC = "task_sync"
 sys_task_types = ["coding", "system design", "personal assistant", "chat robot", "task schedule", "doc summary", "web search"]
 
 # 加载配置文件,初始化部分系统提示词
-with open("../config/prompt_template.json", "r") as f:
+with open("config/prompt_template.json", "r") as f:
     sys_conf = json.load(f)
 
 # ============================================================================
