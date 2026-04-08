@@ -2,7 +2,8 @@ import asyncio
 
 from base_comp.ai_model import async_client, MODEL, create_anthropic_message
 from base_comp.prompt import PROMPT_SYS_SUB_AGENT, PROMPT_SYS_ANALYSIS, \
-    PROMPT_SYS_DEFAULT, get_sys_prompt, ANALYSIS_NAME, PROMPT_SYS_TASK_SCHEDULER, PROMPT_TASK_MONITOR, TASK_SYNC
+    PROMPT_SYS_DEFAULT, get_sys_prompt, ANALYSIS_NAME, PROMPT_SYS_TASK_SCHEDULER, PROMPT_TASK_MONITOR, TASK_SYNC, \
+    prompt_inject
 from base_comp.schedule import TaskGraph, Task
 from base_comp.session import SessionCtx
 from .common import StopReason
@@ -47,7 +48,7 @@ async def agent_loop(ctx: SessionCtx, messages: list):
         event = asyncio.Event()
 
         # 主任务添加 [任务监控，子任务完成度检查] 相关的系统提示词补充
-        session_sys_prompt = session_sys_prompt + PROMPT_TASK_MONITOR
+        session_sys_prompt = prompt_inject(session_sys_prompt, root_path=ctx.session.root_path) + PROMPT_TASK_MONITOR
         # 添加开始监听子任务的用户消息
         messages.append({"role": "user", "content": [
             {"type": "text",
@@ -274,6 +275,7 @@ async def _sub_task_worker(ctx: SessionCtx, task: Task, event: asyncio.Event, ma
         # 子任务是独立的messages，和主任务分开
         # 这样当前任务的上下文不会污染主任务上下文，并且当前任务也获得了充足的前置信息
         async with ctx.ctx_lock:
+            sub_agent_prompt = prompt_inject(PROMPT_SYS_SUB_AGENT, root_path=ctx.session.root_path)
             task_status = ctx.task_graph.to_dict()
         messages = [
             {"role": "user", "content": task.prompt},
@@ -282,7 +284,7 @@ async def _sub_task_worker(ctx: SessionCtx, task: Task, event: asyncio.Event, ma
 
         # 单任务内部循环执行，收到LLM的停止消息再跳出循环
         while True:
-            is_ok, resp_msgs = await create_anthropic_message(max_tokens=10 * 1024, messages=messages, model=MODEL, system=PROMPT_SYS_SUB_AGENT, tools=ANTHROPIC_ALL_TOOLS)
+            is_ok, resp_msgs = await create_anthropic_message(max_tokens=10 * 1024, messages=messages, model=MODEL, system=sub_agent_prompt, tools=ANTHROPIC_ALL_TOOLS)
             if not is_ok: break
 
             # messages要保存所有的历史信息

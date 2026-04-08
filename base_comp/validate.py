@@ -210,5 +210,4 @@ class SdkValidator(ValidationStage):
 def init_validate() -> ValidationStage:
     """初始化验证组件，默认串联所有的基础验证"""
     # 把所有的验证组件串联起来，后续有扩充直接添加就行
-    # return DangerousValidator() | PathValidator()
-    return DangerousValidator()
+    return DangerousValidator() | PathValidator()

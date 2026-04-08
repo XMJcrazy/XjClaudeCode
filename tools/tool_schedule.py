@@ -17,7 +17,7 @@ class ToolTaskAnalysis(ToolBase):
 
     async def execute(self, ctx: SessionCtx, task_type: str, need_schedule: bool = False) -> ToolResp:
         if task_type not in sys_task_types:
-            return ToolResp(TOOL_ERROR_AI, f"illegal task_type，task_type must in {sys_task_types}")
+            return ToolResp(TOOL_ERROR_AI, content=f"illegal task_type，task_type must in:{sys_task_types}")
         return ToolResp(tool_obj={"task_type": task_type, "need_schedule": need_schedule})
 
     def _get_input_schema(self) -> dict:
