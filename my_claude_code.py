@@ -11,7 +11,7 @@ from base_comp.schedule import TaskGraph
 from base_comp.session import Session, SessionCtx
 
 if __name__ == '__main__':
-    output = "/Users/xingjun/PycharmProjects/Pacman"
+    output = "/Users/xingjun/PycharmProjects/Pacman/"
     task1 = f"""模仿这个网页：https://game.haiyong.site/dou.html 写一个同款的网页小游戏，用Typescript语言实现，项目写在:{output}路径下。具体要求如下：
             1.纯前端项目，本地开箱既玩。
             2.项目要有架构文档和设计说明，

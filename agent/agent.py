@@ -3,7 +3,7 @@ import asyncio
 from base_comp.ai_model import async_client, MODEL, create_anthropic_message
 from base_comp.prompt import PROMPT_SYS_SUB_AGENT, PROMPT_SYS_ANALYSIS, \
     PROMPT_SYS_DEFAULT, get_sys_prompt, ANALYSIS_NAME, PROMPT_SYS_TASK_SCHEDULER, PROMPT_TASK_MONITOR, TASK_SYNC, \
-    prompt_inject
+    prompt_inject, SCHEDULER_NAME
 from base_comp.schedule import TaskGraph, Task
 from base_comp.session import SessionCtx
 from .common import StopReason
@@ -52,8 +52,7 @@ async def agent_loop(ctx: SessionCtx, messages: list):
         # 添加开始监听子任务的用户消息
         messages.append({"role": "user", "content": [
             {"type": "text",
-             "text": f"开始监控子任务完成状态，子任务完成之后会通知你，你负责验收就行，我会根据你的验收结果让子任务的agent执行修复"},
-            # {"type": "text", "text": f"子任务开始执行，当前任务执行状态为-->{ctx.task_graph.to_dict()}"},
+             "text": "开始监控子任务完成状态，子任务完成之后会通知你，你负责验收就行，我会根据你的验收结果让子任务的agent执行修复"},
         ]})
 
         # 第一轮对话发送开始监听子任务的消息
@@ -88,7 +87,15 @@ async def agent_loop(ctx: SessionCtx, messages: list):
             # 有子任务完成就把相关信息同步给主任务
             while True:
                 await event.wait()
-                # 主任务重新开始和大模型对话
+                # 任务失败也会触发event，先判断是否有失败任务，如果有就重新拉起
+                async with ctx.ctx_lock:
+                    field_tasks = ctx.task_graph.get_field_tasks()
+                    if field_tasks:
+                        for field in field_tasks:
+                            tg.create_task(_sub_task_worker(ctx, field, event, messages))
+                            ctx.task_graph.set_running(field.id)
+
+                # 如果是有子任务执行完毕，则主任务重新开始和大模型对话开始验收
                 is_ok, resp_msgs = await create_anthropic_message(max_tokens=10 * 1024, messages=messages, model=MODEL, system=session_sys_prompt, tools=ANTHROPIC_ALL_TOOLS)
                 if not is_ok:
                     print(f"TASK Error:{resp_msgs}")
@@ -183,7 +190,9 @@ async def analysis_task(session_ctx: SessionCtx, messages: list) -> tuple[str, b
     for _ in range(10):
         # 为了避免单次分析失败，加入循环确认，最多交互十次（后面可以根据实际情况调整），超过十次还没解决就用默认agent类别
         is_ok, analysis_info = await create_anthropic_message(max_tokens=1024, messages=messages, model=MODEL, system=PROMPT_SYS_ANALYSIS, tools=ANALYSIS_TOOLS)
-        if not is_ok: break
+        if not is_ok:
+            print(f"model chat error:{analysis_info}")
+            break
 
         for block in analysis_info.content:
             if block.type == "tool_use" and block.name == ANALYSIS_NAME:
@@ -208,9 +217,13 @@ async def schedule_task(ctx: SessionCtx, messages: list) -> TaskGraph | None:
             # 这个方法只做任务拆解，拆解完成之后直接退出大模型交互循环
             ctx.task_graph.print_graph()
             break
-        is_ok, resp_msgs = await create_anthropic_message(max_tokens=10 * 1024, messages=messages, model=MODEL,
+        schedule_msg= [{"role": "user", "content": [{"type": "text","text": f"下面是你要拆解的任务详情："}]}]
+        schedule_msg += messages
+        is_ok, resp_msgs = await create_anthropic_message(max_tokens=10 * 1024, messages=schedule_msg, model=MODEL,
                                                        system=PROMPT_SYS_TASK_SCHEDULER, tools=SCHEDULER_TOOLS)
-        if not is_ok: break
+        if not is_ok:
+            print(f"model chat error:{resp_msgs}")
+            break
 
         # 如果模型端有stop_reason信息，则进行对应的逻辑处理
         # 不是调用工具导致的stop，直接退出，任务执行完成（简单处理，还有其他几种停止类型没管，后续补上）
@@ -270,45 +283,56 @@ async def _sub_task_worker(ctx: SessionCtx, task: Task, event: asyncio.Event, ma
     """
     # 控制子任务的并发数
     async with ctx.semaphore:
-
+        print(f"task-{task.id} 开始执行----------------------------->")
         # task_status是全局任务信息，包含了目前所有的子任务执行状态
         # 子任务是独立的messages，和主任务分开
         # 这样当前任务的上下文不会污染主任务上下文，并且当前任务也获得了充足的前置信息
         async with ctx.ctx_lock:
             sub_agent_prompt = prompt_inject(PROMPT_SYS_SUB_AGENT, root_path=ctx.session.root_path)
             task_status = ctx.task_graph.to_dict()
-        messages = [
+        sub_messages = [
             {"role": "user", "content": task.prompt},
             {"role": "user", "content": f"你负责的任务id是：{task.id}，目前全部的任务执行状态如下：{task_status}"},
         ]
 
         # 单任务内部循环执行，收到LLM的停止消息再跳出循环
         while True:
-            is_ok, resp_msgs = await create_anthropic_message(max_tokens=10 * 1024, messages=messages, model=MODEL, system=sub_agent_prompt, tools=ANTHROPIC_ALL_TOOLS)
-            if not is_ok: break
+            is_ok, resp_msgs = await create_anthropic_message(max_tokens=10 * 1024, messages=sub_messages, model=MODEL, system=sub_agent_prompt, tools=ANTHROPIC_ALL_TOOLS)
+            if not is_ok:
+                # 子任务出错直接退出并通知主任务协程
+                print(f"model chat error:{resp_msgs}")
+                async with ctx.ctx_lock:
+                    ctx.task_graph.set_field(task.id)
+                    event.set()
+                return
 
             # messages要保存所有的历史信息
-            messages.append({"role": "assistant", "content": resp_msgs.content})
+            sub_messages.append({"role": "assistant", "content": resp_msgs.content})
 
             # 如果模型端有stop_reason信息，则进行对应的逻辑处理
             # 不是调用工具导致的stop，直接退出，任务执行完成（简单处理，还有其他几种停止类型没管，后续补上）
             if resp_msgs.stop_reason != StopReason.TOOL_USE.value:
                 if resp_msgs.stop_reason == StopReason.END_TURN.value:
                     print(f"TASK-{task.id} FINISHED!")
+                    break       # 跳出循环做汇总信息的同步
                 else:
                     print(f"TASK-{task.id} STOP!  reason:{resp_msgs.stop_reason} \n content:{resp_msgs.content}")
-                break
+                    # 子任务出错直接退出，修改任务状态并通知主任务协程
+                    async with ctx.ctx_lock:
+                        ctx.task_graph.set_field(task.id)
+                        event.set()
+                    return
 
             # 调用统一的AI模型返回信息处理方法
             user_content = await handle_resp_content(ctx, resp_msgs.content)
 
             # len > 0 说明本轮次有用户端信息，包装到发送给AI端的信息中
             if len(user_content) > 0:
-                messages.append({"role": "user", "content": user_content})
+                sub_messages.append({"role": "user", "content": user_content})
 
         # 最后一轮对话就是子任务的总结信息，整理好然后写入到总任务的上下文中
         summary_text = "".join([block.text for block in resp_msgs.content if block.type == "text"]) or "[no summary]"
-        summary_msg = [{"role": "user", "content": {"type": "text", "text":{"task_id": task.id, "summary": summary_text}}}]
+        summary_msg = [{"role": "user", "content": [{"type": "text", "text":{"task_id": task.id, "summary": summary_text}}]}]
 
         # 任务执行完毕,把子任务完成的汇总信息同步给主任务
         async with ctx.ctx_lock:

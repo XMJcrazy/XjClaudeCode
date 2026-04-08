@@ -16,6 +16,7 @@ class TaskState(Enum):
     PENDING = "pending"  # 等待中
     RUNNING = "running"  # 执行中
     COMPLETED = "completed"  # 已完成
+    FIELD = "field"  # 任务失败
 
 @dataclass
 class Task:
@@ -215,6 +216,13 @@ class TaskGraph:
             raise ValueError(f"任务 '{id}' 不存在")
         task.state = TaskState.PENDING
 
+    def set_field(self, id: str):
+        """将任务设置为等待状态"""
+        task = self._tasks.get(id)
+        if not task:
+            raise ValueError(f"任务 '{id}' 不存在")
+        task.state = TaskState.FIELD
+
     def set_running(self, id: str):
         """将任务设置为运行状态"""
         task = self._tasks.get(id)
@@ -278,10 +286,12 @@ class TaskGraph:
         """
         获取所有可执行的任务
         可执行任务定义：状态为pending且所有依赖都已完成
-        Returns:
-            List[Task]: 可执行的任务列表
         """
         return [t for t in self._tasks.values() if self.can_execute(t.id)]
+
+    def get_field_tasks(self) -> List[Task]:
+        """获取执行失败的任务"""
+        return [t for t in self._tasks.values() if t.state == TaskState.FIELD]
 
     def is_all_completed(self) -> bool:
         """判断是否所有任务都已完成"""
