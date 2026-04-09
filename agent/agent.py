@@ -51,8 +51,7 @@ async def agent_loop(ctx: SessionCtx, messages: list):
         session_sys_prompt = prompt_inject(session_sys_prompt, root_path=ctx.session.root_path) + PROMPT_TASK_MONITOR
         # 添加开始监听子任务的用户消息
         messages.append({"role": "user", "content": [
-            {"type": "text",
-             "text": "开始监控子任务完成状态，子任务完成之后会通知你，你负责验收就行，我会根据你的验收结果让子任务的agent执行修复"},
+            {"type": "text", "text": "开始监控子任务完成状态，子任务完成之后会通知你，你负责验收就行，我会根据你的验收结果让子任务的agent执行修复"},
         ]})
 
         # 第一轮对话发送开始监听子任务的消息
@@ -189,11 +188,12 @@ async def analysis_task(session_ctx: SessionCtx, messages: list) -> tuple[str, b
     analysis_msgs = [{"role":"user", "content":["分析下面任务的任务类别并判断是否需要进行任务拆分"]}] + messages
     for _ in range(10):
         # 为了避免单次分析失败，加入循环确认，最多交互十次（后面可以根据实际情况调整），超过十次还没解决就用默认agent类别
-        is_ok, analysis_info = await create_anthropic_message(max_tokens=1024, messages=messages, model=MODEL, system=PROMPT_SYS_ANALYSIS, tools=ANALYSIS_TOOLS)
+        is_ok, analysis_info = await create_anthropic_message(max_tokens=1024, messages=analysis_msgs, model=MODEL, system=PROMPT_SYS_ANALYSIS, tools=ANALYSIS_TOOLS)
         if not is_ok:
             print(f"model chat error:{analysis_info}")
-            break
+            continue
 
+        analysis_msgs.append({"role":"assistant", "content":analysis_info})
         for block in analysis_info.content:
             if block.type == "tool_use" and block.name == ANALYSIS_NAME:
                 is_success, tool_resp, rsp_obj = await route_tool_use(block.name, session_ctx, **block.input)
