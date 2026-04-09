@@ -332,7 +332,10 @@ async def _sub_task_worker(ctx: SessionCtx, task: Task, event: asyncio.Event, ma
 
         # 最后一轮对话就是子任务的总结信息，整理好然后写入到总任务的上下文中
         summary_text = "".join([block.text for block in resp_msgs.content if block.type == "text"]) or "[no summary]"
-        summary_msg = [{"role": "user", "content": [{"type": "text", "text":{"task_id": task.id, "summary": summary_text}}]}]
+        summary_msg = {"role": "user", "content": [
+            {"type": "text", "text":f"{task.id} 已经完成，下面是他执行情况的汇总，你检查一下"},
+            {"type": "text", "text":summary_text}
+        ]}
 
         # 任务执行完毕,把子任务完成的汇总信息同步给主任务
         async with ctx.ctx_lock:
