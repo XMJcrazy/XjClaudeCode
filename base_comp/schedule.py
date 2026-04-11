@@ -200,13 +200,7 @@ class TaskGraph:
         return graph_data
 
     def get_task(self, id: str) -> Optional[Task]:
-        """
-        根据id获取任务
-        Args:
-            id: 任务id
-        Returns:
-            Task或None: 如果找到则返回任务对象，否则返回None
-        """
+        """根据id获取任务"""
         return self._tasks.get(id)
 
     def set_pending(self, id: str):
@@ -228,10 +222,8 @@ class TaskGraph:
         task = self._tasks.get(id)
         if not task:
             raise ValueError(f"任务 '{id}' 不存在")
-
         if not self.can_execute(id):
-            raise ValueError(f"任务 '{id}' 尚不可执行（依赖未完成或状态不是pending）")
-
+            raise ValueError(f"任务 '{id}' 尚不可执行（依赖未完成或状态不是pending或field）")
         task.state = TaskState.RUNNING
 
     def set_completed(self, id: str):
@@ -259,8 +251,8 @@ class TaskGraph:
         if not task:
             return False
 
-        # 状态必须是pending
-        if task.state != TaskState.PENDING:
+        # 状态必须是pending或者field才能启动
+        if task.state != TaskState.PENDING and task.state != TaskState.FIELD:
             return False
 
         # 所有依赖必须已完成
@@ -310,26 +302,29 @@ if __name__ == "__main__":
     }
     map = {"1":"task1", "2":"task2", "3":"task3", "4":"task4", "5":"task5"}
     # 从字典创建任务图
-    graph = TaskGraph.from_dict("总任务", map, data)
+    try:
+        graph = TaskGraph.from_dict("总任务", map, data)
 
-    graph.print_graph()
-    print(graph.to_dict())
-    print(f"图是否合法: {graph.is_valid()}")
-    print(f"所有任务: {graph.get_all_tasks()}")
-    print(f"可执行任务: {graph.get_executable_tasks()}")
-    # 执行任务流程
-    graph.set_running("1")
-    graph.set_completed("1")
-    print(f"start完成后，可执行任务: {graph.get_executable_tasks()}")
-    graph.set_running("2")
-    graph.set_completed("2")
-    print(f"a完成后，可执行任务: {graph.get_executable_tasks()}")
-    graph.set_running("3")
-    graph.set_completed("3")
-    print(f"b完成后，可执行任务: {graph.get_executable_tasks()}")
-    graph.set_running("4")
-    graph.set_completed("4")
-    print(f"c完成后，可执行任务: {graph.get_executable_tasks()}")
-    graph.set_running("5")
-    graph.set_completed("5")
-    print(f"所有任务都完成: {graph.is_all_completed()}")
+        graph.print_graph()
+        print(graph.to_dict())
+        print(f"图是否合法: {graph.is_valid()}")
+        print(f"所有任务: {graph.get_all_tasks()}")
+        print(f"可执行任务: {graph.get_executable_tasks()}")
+        # 执行任务流程
+        graph.set_running("1")
+        graph.set_completed("1")
+        print(f"start完成后，可执行任务: {graph.get_executable_tasks()}")
+        graph.set_running("2")
+        graph.set_completed("2")
+        print(f"a完成后，可执行任务: {graph.get_executable_tasks()}")
+        graph.set_running("3")
+        graph.set_completed("3")
+        print(f"b完成后，可执行任务: {graph.get_executable_tasks()}")
+        graph.set_running("4")
+        graph.set_completed("4")
+        print(f"c完成后，可执行任务: {graph.get_executable_tasks()}")
+        graph.set_running("5")
+        graph.set_completed("5")
+        print(f"所有任务都完成: {graph.is_all_completed()}")
+    except Exception as e:
+        print(e)

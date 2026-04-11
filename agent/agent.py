@@ -79,8 +79,12 @@ async def agent_loop(ctx: SessionCtx, messages: list):
                 if add_tasks:
                     # 存在新解锁的任务，直接并发执行
                     for task in add_tasks:
-                        tg.create_task(_sub_task_worker(ctx, task, event, messages))
-                        ctx.task_graph.set_running(task.id)
+                        try:
+                            # 单个任务有问题不影响其他任务，直接记录日志
+                            ctx.task_graph.set_running(task.id)
+                            tg.create_task(_sub_task_worker(ctx, task, event, messages))
+                        except Exception as e:
+                            print(f"TASK running Error:{e}")
 
             # 主任务持续监听子任务
             # 有子任务完成就把相关信息同步给主任务
@@ -91,8 +95,12 @@ async def agent_loop(ctx: SessionCtx, messages: list):
                     field_tasks = ctx.task_graph.get_field_tasks()
                     if field_tasks:
                         for field in field_tasks:
-                            tg.create_task(_sub_task_worker(ctx, field, event, messages))
-                            ctx.task_graph.set_running(field.id)
+                            try:
+                                # 单个任务有问题不影响其他任务，直接记录日志
+                                ctx.task_graph.set_running(field.id)
+                                tg.create_task(_sub_task_worker(ctx, field, event, messages))
+                            except Exception as e:
+                                print(f"TASK running Error:{e}")
 
                 # 如果是有子任务执行完毕，则主任务重新开始和大模型对话开始验收
                 is_ok, resp_msgs = await create_anthropic_message(max_tokens=10 * 1024, messages=messages, model=MODEL, system=session_sys_prompt, tools=ANTHROPIC_ALL_TOOLS)
@@ -133,10 +141,16 @@ async def agent_loop(ctx: SessionCtx, messages: list):
                                 if block.name == TASK_SYNC and is_success:
                                     # 检测通过，修改对应子任务的状态，
                                     if rsp_obj.get("is_passed"):
-                                        ctx.task_graph.set_completed(rsp_obj.get("task_id"))
+                                        try:
+                                            ctx.task_graph.set_completed(rsp_obj.get("task_id"))
+                                        except Exception as e:
+                                            print(f"TASK set_completed Error:{e}")
                                     # 检测不通过，把对应子任务的状态重置成等待
                                     else:
-                                        ctx.task_graph.set_pending(rsp_obj.get("task_id"))
+                                        try:
+                                            ctx.task_graph.set_pending(rsp_obj.get("task_id"))
+                                        except ValueError as e:
+                                            print(str(e))
 
                                     # 修改完状态之后，拉取新一轮的可执行任务，开始并发执行
                                     if ctx.task_graph.is_all_completed():
@@ -147,8 +161,11 @@ async def agent_loop(ctx: SessionCtx, messages: list):
                                         if add_tasks:
                                             # 存在新解锁的任务，直接并发执行
                                             for task in add_tasks:
-                                                tg.create_task(_sub_task_worker(ctx, task, event, messages))
-                                                ctx.task_graph.set_running(task.id)
+                                                try:
+                                                    ctx.task_graph.set_running(task.id)
+                                                    tg.create_task(_sub_task_worker(ctx, task, event, messages))
+                                                except Exception as e:
+                                                    print(f"TASK running Error:{e}")
                                         # 修改event标记，阻塞主任务循环,继续等待下次子任务完成
                                         event.clear()
                             print(f"TOOL RESP：{tool_resp[:1000] if len(tool_resp) > 1000 else tool_resp}")
@@ -302,7 +319,10 @@ async def _sub_task_worker(ctx: SessionCtx, task: Task, event: asyncio.Event, ma
                 # 子任务出错直接退出并通知主任务协程
                 print(f"model chat error:{resp_msgs}")
                 async with ctx.ctx_lock:
-                    ctx.task_graph.set_field(task.id)
+                    try:
+                        ctx.task_graph.set_field(task.id)
+                    except ValueError as e:
+                        print(str(e))
                     event.set()
                 return
 
@@ -319,7 +339,10 @@ async def _sub_task_worker(ctx: SessionCtx, task: Task, event: asyncio.Event, ma
                     print(f"TASK-{task.id} STOP!  reason:{resp_msgs.stop_reason} \n content:{resp_msgs.content}")
                     # 子任务出错直接退出，修改任务状态并通知主任务协程
                     async with ctx.ctx_lock:
-                        ctx.task_graph.set_field(task.id)
+                        try:
+                            ctx.task_graph.set_field(task.id)
+                        except ValueError as e:
+                            print(str(e))
                         event.set()
                     return
 
