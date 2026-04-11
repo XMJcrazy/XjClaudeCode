@@ -21,382 +21,416 @@ import httpx
 from bs4 import BeautifulSoup
 from markdownify import markdownify
 
-from base_comp import ROOT_PATH
+
+# ==================== 模块级常量 ====================
+
+DEFAULT_MAX_SIZE = 5 * 1024 * 1024  # 默认5MB
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+)
+
+# 临时文件路径，执行完就删除
+TEMP_DIR = os.path.join(tempfile.gettempdir(), "web_md_temp")
+# 持久存放路径
+PERMANENT_DIR = os.path.join(os.path.expanduser("~"), "Documents", "WebMD")
+
+# 默认剔除的html标签
+DEFAULT_STRIP_TAGS = [
+    "script",
+    "style",
+    "nav",
+    "header",
+    "footer",
+    "aside",
+    "iframe",
+    "noscript",
+]
+
+# markdown常用标签
+DEFAULT_EXTRACT_TAGS = [
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "p",
+    "a",
+    "ul",
+    "ol",
+    "li",
+    "code",
+    "pre",
+    "blockquote",
+    "table",
+]
+
+# ==================== 初始化 ====================
+
+# 确保目录存在
+os.makedirs(TEMP_DIR, exist_ok=True)
+os.makedirs(PERMANENT_DIR, exist_ok=True)
 
 
-class WebMarkdownTool:
-    """网页内容获取和Markdown转换工具"""
+# ==================== 功能1：读取HTML数据（异步） ====================
 
-    DEFAULT_MAX_SIZE = 5 * 1024 * 1024  # 默认5MB
-    DEFAULT_USER_AGENT = (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+
+async def fetch_html(
+    url: str,
+    timeout: int = 30,
+    max_size: int = DEFAULT_MAX_SIZE,
+    user_agent: str = DEFAULT_USER_AGENT,
+) -> tuple[str, str | None]:
+    """
+    异步读取指定URL的HTML数据
+
+    Args:
+        url: 网页URL
+        timeout: 请求超时时间（秒）
+        max_size: 最大文件大小（字节）
+        user_agent: User-Agent
+
+    Returns:
+        tuple: (html字符串, 错误信息或None)
+    """
+    if not url or not url.startswith(("http://", "https://")):
+        return "", f"无效的URL格式: {url}"
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout),
+            follow_redirects=True,
+            headers={"User-Agent": user_agent},
+        ) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+
+        html = response.text
+        html_size = len(html.encode("utf-8"))
+
+        if html_size > max_size:
+            size_mb = html_size / (1024 * 1024)
+            max_mb = max_size / (1024 * 1024)
+            return "", f"HTML大小 ({size_mb:.2f}MB) 超过限制 ({max_mb:.2f}MB)"
+
+        return html, None
+
+    except httpx.TimeoutException:
+        return "", f"请求超时 ({timeout}秒)"
+    except httpx.HTTPStatusError as e:
+        return "", f"HTTP错误: {e.response.status_code}"
+    except Exception as e:
+        return "", f"获取失败: {str(e)}"
+
+
+# ==================== 功能2：提取指定标签 ====================
+
+
+def extract_tags(html: str, tags: list[str]) -> str:
+    """
+    从HTML中提取指定标签的内容
+
+    Args:
+        html: HTML字符串
+        tags: 要提取的标签列表，如 ["h1", "p", "code"]
+
+    Returns:
+        格式化后的文本
+    """
+    if not html or not tags:
+        return ""
+
+    soup = BeautifulSoup(html, "html.parser")
+    results = []
+
+    for tag in tags:
+        elements = soup.find_all(tag)
+        for elem in elements:
+            text = elem.get_text(strip=True)
+            if text:
+                results.append(f"[{tag}] {text}")
+
+    return "\n".join(results)
+
+
+# ==================== 功能3：剔除指定标签 ====================
+
+
+def strip_tags(html: str, tags: list[str] = None) -> str:
+    """
+    从HTML中剔除指定标签及其内容
+
+    Args:
+        html: HTML字符串
+        tags: 要剔除的标签列表，默认为DEFAULT_STRIP_TAGS
+
+    Returns:
+        剔除后的HTML字符串
+    """
+    if not html:
+        return ""
+
+    tags = tags or DEFAULT_STRIP_TAGS
+    soup = BeautifulSoup(html, "html.parser")
+
+    for tag in tags:
+        for elem in soup.find_all(tag):
+            elem.decompose()
+
+    return str(soup)
+
+
+# ==================== 功能4：HTML转Markdown ====================
+
+
+def html_to_markdown(
+    html: str,
+    strip_tags_list: list[str] = None,
+    heading_style: Literal["atx", "setex", "underlined"] = "atx",
+    bullets: str = "-",
+) -> str:
+    """
+    将HTML转换为Markdown
+
+    Args:
+        html: HTML字符串
+        strip_tags_list: 要剔除的标签列表
+        heading_style: 标题样式
+        bullets: 列表符号
+
+    Returns:
+        Markdown字符串
+    """
+    if not html:
+        return ""
+
+    # 先剔除指定标签
+    if strip_tags_list:
+        html = strip_tags(html, strip_tags_list)
+
+    # 转换为Markdown
+    md = markdownify(
+        html,
+        heading_style=heading_style,
+        bullets=bullets,
+        strip=strip_tags_list or DEFAULT_STRIP_TAGS,
     )
 
-    # 临时文件路径，执行完就删除
-    TEMP_DIR = os.path.join(tempfile.gettempdir(), "web_md_temp")
-    # 持久存放路径，先存着，后续还要改持久化策略
-    PERMANENT_DIR = os.path.join(ROOT_PATH, "data", "WebMD")
+    return _cleanup_markdown(md)
 
-    # 默认剔除的html标签
-    DEFAULT_STRIP_TAGS = [
-        "script",
-        "style",
-        "nav",
-        "header",
-        "footer",
-        "aside",
-        "iframe",
-        "noscript",
-    ]
-    # markdown常用标签，后续可以根据需要扩充
-    DEFAULT_EXTRACT_TAGS = [
-        "h1",
-        "h2",
-        "h3",
-        "h4",
-        "h5",
-        "h6",
-        "p",
-        "a",
-        "ul",
-        "ol",
-        "li",
-        "code",
-        "pre",
-        "blockquote",
-        "table",
-    ]
 
-    def __init__(
-        self, max_size: int = DEFAULT_MAX_SIZE, user_agent: str = DEFAULT_USER_AGENT
-    ):
-        """
-        初始化工具
+# ==================== 功能5：保存HTML到本地（异步） ====================
 
-        :param    max_size: 最大文件大小（字节），默认5MB
-        :param    user_agent: 请求User-Agent
-        """
-        self.max_size = max_size
-        self.user_agent = user_agent
-        self._ensure_dirs()
 
-    def _ensure_dirs(self):
-        """确保临时和永久目录存在"""
-        os.makedirs(self.TEMP_DIR, exist_ok=True)
-        os.makedirs(self.PERMANENT_DIR, exist_ok=True)
+async def save_html(
+    html: str, filename: str = None, permanent: bool = False
+) -> tuple[str, str | None]:
+    """
+    异步保存HTML到本地文件
 
-    # ==================== 功能1：读取HTML数据（异步） ====================
+    Args:
+        html: HTML字符串
+        filename: 文件名（不包含扩展名），默认自动生成
+        permanent: True永久保存，False临时保存
 
-    async def fetch_html(self, url: str, timeout: int = 30) -> tuple[str, str | None]:
-        """
-        异步读取指定URL的HTML数据
+    Returns:
+        tuple: (文件路径, 错误信息或None)
+    """
+    if not html:
+        return "", "HTML内容为空"
 
-        :param    url: 网页URL
-        :param    timeout: 请求超时时间（秒）
-        :returns
-            tuple: (html字符串, 错误信息或None)
-                   成功返回 (html, None)
-                   失败返回 ("", error_message)
-        """
-        if not url or not url.startswith(("http://", "https://")):
-            return "", f"无效的URL格式: {url}"
+    if filename is None:
+        filename = f"html_{uuid.uuid4().hex[:8]}"
 
-        try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(timeout),
-                follow_redirects=True,
-                headers={"User-Agent": self.user_agent},
-            ) as client:
-                response = await client.get(url)
-                response.raise_for_status()
+    # 确保有.html扩展名
+    if not filename.endswith(".html"):
+        filename += ".html"
 
-            html = response.text
-            html_size = len(html.encode("utf-8"))
+    # 选择目录
+    save_dir = PERMANENT_DIR if permanent else TEMP_DIR
+    file_path = os.path.join(save_dir, filename)
 
-            if html_size > self.max_size:
-                size_mb = html_size / (1024 * 1024)
-                max_mb = self.max_size / (1024 * 1024)
-                return "", f"HTML大小 ({size_mb:.2f}MB) 超过限制 ({max_mb:.2f}MB)"
+    try:
+        await asyncio.to_thread(_write_file, file_path, html)
+        return file_path, None
+    except Exception as e:
+        return "", f"保存失败: {str(e)}"
 
-            return html, None
 
-        except httpx.TimeoutException:
-            return "", f"请求超时 ({timeout}秒)"
-        except httpx.HTTPStatusError as e:
-            return "", f"HTTP错误: {e.response.status_code}"
-        except Exception as e:
-            return "", f"获取失败: {str(e)}"
+# ==================== 功能6：保存Markdown到本地（异步） ====================
 
-    # ==================== 功能2：提取指定标签 ====================
 
-    def extract_tags(self, html: str, tags: list[str]) -> str:
-        """
-        从HTML中提取指定标签的内容
-        :param    html: HTML字符串
-        :param    tags: 要提取的标签列表，如 ["h1", "p", "code"]
-        """
-        if not html or not tags:
-            return ""
+async def save_markdown(
+    markdown: str, filename: str = None, permanent: bool = False
+) -> tuple[str, str | None]:
+    """
+    异步保存Markdown到本地文件
 
-        soup = BeautifulSoup(html, "html.parser")
-        results = []
+    Args:
+        markdown: Markdown字符串
+        filename: 文件名（不包含扩展名），默认自动生成
+        permanent: True永久保存，False临时保存
 
-        for tag in tags:
-            elements = soup.find_all(tag)
-            for elem in elements:
-                text = elem.get_text(strip=True)
-                if text:
-                    results.append(f"[{tag}] {text}")
+    Returns:
+        tuple: (文件路径, 错误信息或None)
+    """
+    if not markdown:
+        return "", "Markdown内容为空"
 
-        return "\n".join(results)
+    if filename is None:
+        filename = f"md_{uuid.uuid4().hex[:8]}"
 
-    # ==================== 功能3：剔除指定标签 ====================
+    # 确保有.md扩展名
+    if not filename.endswith(".md"):
+        filename += ".md"
 
-    def strip_tags(self, html: str, tags: list[str] = None) -> str:
-        """
-        从HTML中剔除指定标签及其内容
+    # 选择目录
+    save_dir = PERMANENT_DIR if permanent else TEMP_DIR
+    file_path = os.path.join(save_dir, filename)
 
-        :param    html: HTML字符串
-        :param    tags: 要剔除的标签列表，默认为DEFAULT_STRIP_TAGS
-        """
-        if not html:
-            return ""
+    try:
+        await asyncio.to_thread(_write_file, file_path, markdown)
+        return file_path, None
+    except Exception as e:
+        return "", f"保存失败: {str(e)}"
 
-        tags = tags or self.DEFAULT_STRIP_TAGS
-        soup = BeautifulSoup(html, "html.parser")
 
-        for tag in tags:
-            for elem in soup.find_all(tag):
-                elem.decompose()
+# ==================== 功能7：读取Markdown文件 ====================
 
-        return str(soup)
 
-    # ==================== 功能4：HTML转Markdown ====================
+def read_markdown(
+    file_path: str, max_lines: int = None, tags: list[str] = None
+) -> tuple[str, str | None]:
+    """
+    读取Markdown文件并可按需获取部分数据
 
-    def html_to_markdown(
-        self,
-        html: str,
-        strip_tags: list[str] = None,
-        heading_style: Literal["atx", "setex", "underlined"] = "atx",
-        bullets: str = "-",
-    ) -> str:
-        """
-        将HTML转换为Markdown
+    Args:
+        file_path: Markdown文件路径
+        max_lines: 最大行数限制，None则读取全部
+        tags: 要提取的内容类型，如 ["h1", "h2", "code", "pre"]
 
-        :param    html: HTML字符串
-        :param    strip_tags: 要剔除的标签列表
-        :param   heading_style: 标题样式
-        :param    bullets: 列表符号
-        """
-        if not html:
-            return ""
+    Returns:
+        tuple: (Markdown内容, 错误信息或None)
+    """
+    if not os.path.exists(file_path):
+        return "", f"文件不存在: {file_path}"
 
-        # 先剔除指定标签
-        if strip_tags:
-            html = self.strip_tags(html, strip_tags)
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
 
-        # 转换为Markdown
-        md = markdownify(
-            html,
-            heading_style=heading_style,
-            bullets=bullets,
-            strip=strip_tags or self.DEFAULT_STRIP_TAGS,
-        )
+        # 限制行数
+        if max_lines:
+            lines = lines[:max_lines]
 
-        return self._cleanup_markdown(md)
+        content = "".join(lines)
 
-    # ==================== 功能5：保存HTML到本地（异步） ====================
+        # 按标签类型提取
+        if tags:
+            content = extract_markdown_by_tags(content, tags)
 
-    async def save_html(
-        self, html: str, filename: str = None, permanent: bool = False
-    ) -> tuple[str, str | None]:
-        """
-        异步保存HTML到本地文件
+        return content, None
 
-        :param    html: HTML字符串
-        :param    filename: 文件名（不包含扩展名），默认自动生成
-        :param    permanent: True永久保存，False临时保存
-        """
-        if not html:
-            return "", "HTML内容为空"
+    except Exception as e:
+        return "", f"读取失败: {str(e)}"
 
-        if filename is None:
-            filename = f"html_{uuid.uuid4().hex[:8]}"
 
-        # 确保有.html扩展名
-        if not filename.endswith(".html"):
-            filename += ".html"
+# ==================== 内部辅助函数 ====================
 
-        # 选择目录
-        save_dir = self.PERMANENT_DIR if permanent else self.TEMP_DIR
-        file_path = os.path.join(save_dir, filename)
 
-        try:
-            # 使用 asyncio.to_thread 在线程池中执行文件IO，避免阻塞
-            await asyncio.to_thread(self._write_file, file_path, html)
-            return file_path, None
-        except Exception as e:
-            return "", f"保存失败: {str(e)}"
+def _write_file(file_path: str, content: str):
+    """同步写入文件（供 asyncio.to_thread 调用）"""
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(content)
 
-    def _write_file(self, file_path: str, content: str):
-        """同步写入文件（供 asyncio.to_thread 调用）"""
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(content)
 
-    # ==================== 功能6：保存Markdown到本地（异步） ====================
-
-    async def save_markdown(
-        self, markdown: str, filename: str = None, permanent: bool = False
-    ) -> tuple[str, str | None]:
-        """
-        异步保存Markdown到本地文件
-
-        :param    markdown: Markdown字符串
-        :param    filename: 文件名（不包含扩展名），默认自动生成
-        :param    permanent: True永久保存，False临时保存
-        """
-        if not markdown:
-            return "", "Markdown内容为空"
-
-        if filename is None:
-            filename = f"md_{uuid.uuid4().hex[:8]}"
-
-        # 确保有.md扩展名
-        if not filename.endswith(".md"):
-            filename += ".md"
-
-        # 选择目录
-        save_dir = self.PERMANENT_DIR if permanent else self.TEMP_DIR
-        file_path = os.path.join(save_dir, filename)
-
-        try:
-            # 使用 asyncio.to_thread 在线程池中执行文件IO，避免阻塞
-            await asyncio.to_thread(self._write_file, file_path, markdown)
-            return file_path, None
-        except Exception as e:
-            return "", f"保存失败: {str(e)}"
-
-    # ==================== 功能7：读取Markdown文件 ====================
-
-    def read_markdown(
-        self, file_path: str, max_lines: int = None, tags: list[str] = None
-    ) -> tuple[str, str | None]:
-        """
-        读取Markdown文件并可按需获取部分数据
-
-        :param    file_path: Markdown文件路径
-:param        :param    max_lines: 最大行数限制，None则读取全部
-        :param    tags: 要提取的内容类型，如 ["h1", "h2", "code", "pre"]
-                  支持的标签：h1, h2, h3, h4, h5, h6, p, code, pre, blockquote, ul, ol, li, table
-        """
-        if not os.path.exists(file_path):
-            return "", f"文件不存在: {file_path}"
-
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-
-            # 限制行数
-            if max_lines:
-                lines = lines[:max_lines]
-
-            content = "".join(lines)
-
-            # 按标签类型提取
-            if tags:
-                content = self._extract_markdown_by_tags(content, tags)
-
-            return content, None
-
-        except Exception as e:
-            return "", f"读取失败: {str(e)}"
-
-    def _extract_markdown_by_tags(self, markdown: str, tags: list[str]) -> str:
-        """
-        从Markdown中按标签类型提取内容
-
-        :param markdown: Markdown字符串
-        :param tags: 要提取的标签类型
-        :return 过滤后的Markdown内容
-        """
-        lines = markdown.splitlines()
-        filtered = []
-        tag_set = set(tags)
-
-        for line in lines:
-            # 判断行类型
-            line_type = self._get_markdown_line_type(line)
-
-            if line_type in tag_set:
-                filtered.append(line)
-            elif line_type == "list_item":
-                # 列表项特殊处理：如果指定了 ul/ol/li，保留所有列表项
-                if {"ul", "ol", "li"} & tag_set:
-                    filtered.append(line)
-            elif line_type == "table":
-                if "table" in tag_set:
-                    filtered.append(line)
-            elif line_type == "code_block":
-                if "pre" in tag_set or "code" in tag_set:
-                    filtered.append(line)
-
-        return "\n".join(filtered)
-
-    def _get_markdown_line_type(self, line: str) -> str:
-        """判断Markdown行的类型"""
+def _cleanup_markdown(md: str) -> str:
+    """清理Markdown多余空白"""
+    lines = []
+    for line in md.splitlines():
         stripped = line.strip()
+        if stripped:
+            lines.append(stripped)
 
-        if stripped.startswith("# "):
-            return "h1"
-        elif stripped.startswith("## "):
-            return "h2"
-        elif stripped.startswith("### "):
-            return "h3"
-        elif stripped.startswith("#### "):
-            return "h4"
-        elif stripped.startswith("##### "):
-            return "h5"
-        elif stripped.startswith("###### "):
-            return "h6"
-        elif stripped.startswith("```"):
-            return "code_block"
-        elif stripped.startswith(">"):
-            return "blockquote"
-        elif stripped.startswith("|"):
-            return "table"
-        elif (
-            stripped.startswith("- ")
-            or stripped.startswith("* ")
-            or stripped.startswith("+ ")
-        ):
-            return "list_item"
-        elif stripped[0].isdigit() and ". " in stripped[:5]:
-            return "list_item"
-        elif stripped.startswith("```"):
-            return "code_block"
-        elif stripped.startswith("    ") or stripped.startswith("\t"):
-            return "code"
-        else:
-            return "p" if stripped else ""
+    # 合并，去除连续空行
+    cleaned = []
+    prev_empty = False
+    for line in lines:
+        current_empty = not line.strip()
+        if not (current_empty and prev_empty):
+            cleaned.append(line)
+        prev_empty = current_empty
 
-    def _cleanup_markdown(self, md: str) -> str:
-        """清理Markdown多余空白"""
-        lines = []
-        for line in md.splitlines():
-            stripped = line.strip()
-            if stripped:
-                lines.append(stripped)
+    return "\n".join(cleaned).strip()
 
-        # 合并，去除连续空行
-        cleaned = []
-        prev_empty = False
-        for line in lines:
-            current_empty = not line.strip()
-            if not (current_empty and prev_empty):
-                cleaned.append(line)
-            prev_empty = current_empty
 
-        return "\n".join(cleaned).strip()
+def extract_markdown_by_tags(markdown: str, tags: list[str]) -> str:
+    """
+    从Markdown中按标签类型提取内容
+
+    Args:
+        markdown: Markdown字符串
+        tags: 要提取的标签类型
+
+    Returns:
+        过滤后的Markdown内容
+    """
+    lines = markdown.splitlines()
+    filtered = []
+    tag_set = set(tags)
+
+    for line in lines:
+        line_type = _get_markdown_line_type(line)
+
+        if line_type in tag_set:
+            filtered.append(line)
+        elif line_type == "list_item":
+            if {"ul", "ol", "li"} & tag_set:
+                filtered.append(line)
+        elif line_type == "table":
+            if "table" in tag_set:
+                filtered.append(line)
+        elif line_type == "code_block":
+            if "pre" in tag_set or "code" in tag_set:
+                filtered.append(line)
+
+    return "\n".join(filtered)
+
+
+def _get_markdown_line_type(line: str) -> str:
+    """判断Markdown行的类型"""
+    stripped = line.strip()
+
+    if stripped.startswith("# "):
+        return "h1"
+    elif stripped.startswith("## "):
+        return "h2"
+    elif stripped.startswith("### "):
+        return "h3"
+    elif stripped.startswith("#### "):
+        return "h4"
+    elif stripped.startswith("##### "):
+        return "h5"
+    elif stripped.startswith("###### "):
+        return "h6"
+    elif stripped.startswith("```"):
+        return "code_block"
+    elif stripped.startswith(">"):
+        return "blockquote"
+    elif stripped.startswith("|"):
+        return "table"
+    elif (
+        stripped.startswith("- ")
+        or stripped.startswith("* ")
+        or stripped.startswith("+ ")
+    ):
+        return "list_item"
+    elif stripped[0].isdigit() and ". " in stripped[:5]:
+        return "list_item"
+    elif stripped.startswith("    ") or stripped.startswith("\t"):
+        return "code"
+    else:
+        return "p" if stripped else ""
 
 
 # ==================== 测试代码 ====================
@@ -405,17 +439,16 @@ class WebMarkdownTool:
 async def run_tests():
     """逐个测试所有功能（异步版本）"""
 
-    tool = WebMarkdownTool(max_size=10 * 1024 * 1024)  # 10MB for testing
-    test_url = "https://github.com/shareAI-lab/learn-claude-code/blob/main/agents/s04_subagent.py#L214"
+    test_url = "https://github.com/shareAI-lab/learn-claude-code/blob/main/agents/s11_error_recovery.py"
 
     print("=" * 60)
-    print("WebMarkdownTool 测试（异步版）")
+    print("WebMarkdownTool 测试（静态方法版）")
     print("=" * 60)
 
     # 测试1：读取HTML
     print("\n【测试1】fetch_html - 读取HTML数据")
     print("-" * 40)
-    html, error = await tool.fetch_html(test_url)
+    html, error = await fetch_html(test_url, max_size=10 * 1024 * 1024)
     if error:
         print(f"✗ 失败: {error}")
     else:
@@ -426,7 +459,7 @@ async def run_tests():
     print("\n【测试2】extract_tags - 提取指定标签")
     print("-" * 40)
     if html:
-        extracted = tool.extract_tags(html, ["h1", "p"])
+        extracted = extract_tags(html, ["h1", "p"])
         print(f"✓ 提取结果:\n{extracted}")
     else:
         print("⊘ 跳过（无HTML数据）")
@@ -435,7 +468,7 @@ async def run_tests():
     print("\n【测试3】strip_tags - 剔除指定标签")
     print("-" * 40)
     if html:
-        stripped_html = tool.strip_tags(html, ["script", "style"])
+        stripped_html = strip_tags(html, ["script", "style"])
         print(f"✓ 剔除后长度: {len(stripped_html)} 字符（原: {len(html)}）")
     else:
         print("⊘ 跳过（无HTML数据）")
@@ -444,7 +477,7 @@ async def run_tests():
     print("\n【测试4】html_to_markdown - HTML转Markdown")
     print("-" * 40)
     if html:
-        md = tool.html_to_markdown(html, strip_tags=["script", "style"])
+        md = html_to_markdown(html, strip_tags_list=["script", "style"])
         print(f"✓ 转换结果:\n{md[:300]}...")
     else:
         print("⊘ 跳过（无HTML数据）")
@@ -454,16 +487,14 @@ async def run_tests():
     print("-" * 40)
     if html:
         # 临时保存
-        temp_path, error = await tool.save_html(
-            html, filename="test_temp", permanent=False
-        )
+        temp_path, error = await save_html(html, filename="test_temp", permanent=False)
         if error:
             print(f"✗ 临时保存失败: {error}")
         else:
             print(f"✓ 临时保存成功: {temp_path}")
 
         # 永久保存
-        perm_path, error = await tool.save_html(
+        perm_path, error = await save_html(
             html, filename="test_permanent", permanent=True
         )
         if error:
@@ -477,10 +508,10 @@ async def run_tests():
     print("\n【测试6】save_markdown - 保存Markdown到本地")
     print("-" * 40)
     if html:
-        md = tool.html_to_markdown(html)
+        md = html_to_markdown(html)
         if md:
             # 临时保存
-            temp_md_path, error = await tool.save_markdown(
+            temp_md_path, error = await save_markdown(
                 md, filename="test_md_temp", permanent=False
             )
             if error:
@@ -489,7 +520,7 @@ async def run_tests():
                 print(f"✓ 临时保存成功: {temp_md_path}")
 
             # 永久保存
-            perm_md_path, error = await tool.save_markdown(
+            perm_md_path, error = await save_markdown(
                 md, filename="test_md_permanent", permanent=True
             )
             if error:
@@ -503,25 +534,24 @@ async def run_tests():
     print("\n【测试7】read_markdown - 读取Markdown文件")
     print("-" * 40)
     if html:
-        # 先读取刚才保存的临时文件
-        test_file = os.path.join(tool.TEMP_DIR, "test_md_temp.md")
+        test_file = os.path.join(TEMP_DIR, "test_md_temp.md")
         if os.path.exists(test_file):
             # 完整读取
-            content, error = tool.read_markdown(test_file)
+            content, error = read_markdown(test_file)
             if error:
                 print(f"✗ 读取失败: {error}")
             else:
                 print(f"✓ 完整读取成功，长度: {len(content)} 字符")
 
             # 限制行数
-            content, error = tool.read_markdown(test_file, max_lines=5)
+            content, error = read_markdown(test_file, max_lines=5)
             if error:
                 print(f"✗ 限制行数读取失败: {error}")
             else:
                 print(f"✓ 限制5行读取:\n{content}")
 
             # 按标签提取
-            content, error = tool.read_markdown(test_file, tags=["h1", "h2"])
+            content, error = read_markdown(test_file, tags=["h1", "h2"])
             if error:
                 print(f"✗ 标签过滤读取失败: {error}")
             else:
@@ -535,10 +565,10 @@ async def run_tests():
     print("\n【清理】删除测试文件")
     print("-" * 40)
     test_files = [
-        os.path.join(tool.TEMP_DIR, "test_temp.html"),
-        # os.path.join(tool.PERMANENT_DIR, "test_permanent.html"),
-        os.path.join(tool.TEMP_DIR, "test_md_temp.md"),
-        # os.path.join(tool.PERMANENT_DIR, "test_md_permanent.md"),
+        os.path.join(TEMP_DIR, "test_temp.html"),
+        # os.path.join(PERMANENT_DIR, "test_permanent.html"),
+        os.path.join(TEMP_DIR, "test_md_temp.md"),
+        # os.path.join(PERMANENT_DIR, "test_md_permanent.md"),
     ]
     for f in test_files:
         if os.path.exists(f):
