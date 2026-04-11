@@ -16,11 +16,13 @@ import uuid
 import asyncio
 import tempfile
 from typing import Literal
+from urllib.parse import urlparse
 
 import httpx
 from bs4 import BeautifulSoup
 from markdownify import markdownify
 
+from base_comp import ROOT_PATH
 
 # ==================== 模块级常量 ====================
 
@@ -32,7 +34,7 @@ DEFAULT_USER_AGENT = (
 # 临时文件路径，执行完就删除
 TEMP_DIR = os.path.join(tempfile.gettempdir(), "web_md_temp")
 # 持久存放路径
-PERMANENT_DIR = os.path.join(os.path.expanduser("~"), "Documents", "WebMD")
+PERMANENT_DIR = os.path.join(ROOT_PATH, "data", "WebMD")
 
 # 默认剔除的html标签
 DEFAULT_STRIP_TAGS = [
@@ -65,19 +67,29 @@ DEFAULT_EXTRACT_TAGS = [
     "table",
 ]
 
-# ==================== 初始化 ====================
-
 # 确保目录存在
 os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(PERMANENT_DIR, exist_ok=True)
 
 
-# ==================== 功能1：读取HTML数据（异步） ====================
+def _validate_url(url: str) -> tuple[bool, str]:
+    """验证 URL"""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False, "URL 必须以 http:// 或 https:// 开头"
+        if not parsed.netloc:
+            return False, "URL 缺少域名部分"
+        return True, ""
+    except Exception as e:
+        return False, f"URL 格式错误: {e}"
 
 
 async def fetch_html(
     url: str,
+    format: str,
     timeout: int = 30,
+    ignore_tags: list[str] = None,
     max_size: int = DEFAULT_MAX_SIZE,
     user_agent: str = DEFAULT_USER_AGENT,
 ) -> tuple[str, str | None]:
@@ -86,16 +98,18 @@ async def fetch_html(
 
     Args:
         url: 网页URL
+        format: 转化成的格式，仅允许 html,text,markdown三种格式，默认是html
         timeout: 请求超时时间（秒）
+        ignore_tags: 忽略的html标签，不传入就是默认配置
         max_size: 最大文件大小（字节）
         user_agent: User-Agent
 
     Returns:
         tuple: (html字符串, 错误信息或None)
     """
-    if not url or not url.startswith(("http://", "https://")):
-        return "", f"无效的URL格式: {url}"
-
+    is_ok, err_info = _validate_url(url)
+    if not is_ok:
+        return "", err_info
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(timeout),
@@ -106,24 +120,40 @@ async def fetch_html(
             response.raise_for_status()
 
         html = response.text
-        html_size = len(html.encode("utf-8"))
 
-        if html_size > max_size:
-            size_mb = html_size / (1024 * 1024)
+        # 默认移除不重要的html标签，避免过多的无效数据
+        soup = BeautifulSoup(html, "html.parser")
+        if ignore_tags is None:
+            ignore_tags = DEFAULT_STRIP_TAGS
+        for tag in ignore_tags:
+            for elem in soup.find_all(tag):
+                elem.decompose()
+
+        if format == "markdown":
+            text = html_to_markdown(str(soup))
+        elif format == "text":
+            # 获取文本
+            text = soup.get_text(separator=" ", strip=True)
+
+            # 清理多余空白
+            lines = (line.strip() for line in text.splitlines())
+            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+            text = " ".join(chunk for chunk in chunks if chunk)
+        else:
+            text = str(soup)
+
+        if len(text) > max_size:
+            size_mb = len(text) / (1024 * 1024)
             max_mb = max_size / (1024 * 1024)
-            return "", f"HTML大小 ({size_mb:.2f}MB) 超过限制 ({max_mb:.2f}MB)"
+            return "", f"网络数据大小 ({size_mb:.2f}MB) 超过限制 ({max_mb:.2f}MB)"
 
-        return html, None
-
+        return text, None
     except httpx.TimeoutException:
         return "", f"请求超时 ({timeout}秒)"
     except httpx.HTTPStatusError as e:
         return "", f"HTTP错误: {e.response.status_code}"
     except Exception as e:
         return "", f"获取失败: {str(e)}"
-
-
-# ==================== 功能2：提取指定标签 ====================
 
 
 def extract_tags(html: str, tags: list[str]) -> str:
@@ -153,8 +183,6 @@ def extract_tags(html: str, tags: list[str]) -> str:
     return "\n".join(results)
 
 
-# ==================== 功能3：剔除指定标签 ====================
-
 
 def strip_tags(html: str, tags: list[str] = None) -> str:
     """
@@ -180,12 +208,8 @@ def strip_tags(html: str, tags: list[str] = None) -> str:
     return str(soup)
 
 
-# ==================== 功能4：HTML转Markdown ====================
-
-
 def html_to_markdown(
     html: str,
-    strip_tags_list: list[str] = None,
     heading_style: Literal["atx", "setex", "underlined"] = "atx",
     bullets: str = "-",
 ) -> str:
@@ -204,22 +228,14 @@ def html_to_markdown(
     if not html:
         return ""
 
-    # 先剔除指定标签
-    if strip_tags_list:
-        html = strip_tags(html, strip_tags_list)
-
     # 转换为Markdown
     md = markdownify(
         html,
         heading_style=heading_style,
         bullets=bullets,
-        strip=strip_tags_list or DEFAULT_STRIP_TAGS,
     )
 
     return _cleanup_markdown(md)
-
-
-# ==================== 功能5：保存HTML到本地（异步） ====================
 
 
 async def save_html(
@@ -257,9 +273,6 @@ async def save_html(
         return "", f"保存失败: {str(e)}"
 
 
-# ==================== 功能6：保存Markdown到本地（异步） ====================
-
-
 async def save_markdown(
     markdown: str, filename: str = None, permanent: bool = False
 ) -> tuple[str, str | None]:
@@ -293,9 +306,6 @@ async def save_markdown(
         return file_path, None
     except Exception as e:
         return "", f"保存失败: {str(e)}"
-
-
-# ==================== 功能7：读取Markdown文件 ====================
 
 
 def read_markdown(
@@ -333,9 +343,6 @@ def read_markdown(
 
     except Exception as e:
         return "", f"读取失败: {str(e)}"
-
-
-# ==================== 内部辅助函数 ====================
 
 
 def _write_file(file_path: str, content: str):
@@ -432,153 +439,3 @@ def _get_markdown_line_type(line: str) -> str:
     else:
         return "p" if stripped else ""
 
-
-# ==================== 测试代码 ====================
-
-
-async def run_tests():
-    """逐个测试所有功能（异步版本）"""
-
-    test_url = "https://github.com/shareAI-lab/learn-claude-code/blob/main/agents/s11_error_recovery.py"
-
-    print("=" * 60)
-    print("WebMarkdownTool 测试（静态方法版）")
-    print("=" * 60)
-
-    # 测试1：读取HTML
-    print("\n【测试1】fetch_html - 读取HTML数据")
-    print("-" * 40)
-    html, error = await fetch_html(test_url, max_size=10 * 1024 * 1024)
-    if error:
-        print(f"✗ 失败: {error}")
-    else:
-        print(f"✓ 成功获取HTML，长度: {len(html)} 字符")
-        print(f"预览（前200字符）: {html[:200]}...")
-
-    # 测试2：提取指定标签
-    print("\n【测试2】extract_tags - 提取指定标签")
-    print("-" * 40)
-    if html:
-        extracted = extract_tags(html, ["h1", "p"])
-        print(f"✓ 提取结果:\n{extracted}")
-    else:
-        print("⊘ 跳过（无HTML数据）")
-
-    # 测试3：剔除指定标签
-    print("\n【测试3】strip_tags - 剔除指定标签")
-    print("-" * 40)
-    if html:
-        stripped_html = strip_tags(html, ["script", "style"])
-        print(f"✓ 剔除后长度: {len(stripped_html)} 字符（原: {len(html)}）")
-    else:
-        print("⊘ 跳过（无HTML数据）")
-
-    # 测试4：HTML转Markdown
-    print("\n【测试4】html_to_markdown - HTML转Markdown")
-    print("-" * 40)
-    if html:
-        md = html_to_markdown(html, strip_tags_list=["script", "style"])
-        print(f"✓ 转换结果:\n{md[:300]}...")
-    else:
-        print("⊘ 跳过（无HTML数据）")
-
-    # 测试5：保存HTML
-    print("\n【测试5】save_html - 保存HTML到本地")
-    print("-" * 40)
-    if html:
-        # 临时保存
-        temp_path, error = await save_html(html, filename="test_temp", permanent=False)
-        if error:
-            print(f"✗ 临时保存失败: {error}")
-        else:
-            print(f"✓ 临时保存成功: {temp_path}")
-
-        # 永久保存
-        perm_path, error = await save_html(
-            html, filename="test_permanent", permanent=True
-        )
-        if error:
-            print(f"✗ 永久保存失败: {error}")
-        else:
-            print(f"✓ 永久保存成功: {perm_path}")
-    else:
-        print("⊘ 跳过（无HTML数据）")
-
-    # 测试6：保存Markdown
-    print("\n【测试6】save_markdown - 保存Markdown到本地")
-    print("-" * 40)
-    if html:
-        md = html_to_markdown(html)
-        if md:
-            # 临时保存
-            temp_md_path, error = await save_markdown(
-                md, filename="test_md_temp", permanent=False
-            )
-            if error:
-                print(f"✗ 临时保存失败: {error}")
-            else:
-                print(f"✓ 临时保存成功: {temp_md_path}")
-
-            # 永久保存
-            perm_md_path, error = await save_markdown(
-                md, filename="test_md_permanent", permanent=True
-            )
-            if error:
-                print(f"✗ 永久保存失败: {error}")
-            else:
-                print(f"✓ 永久保存成功: {perm_md_path}")
-    else:
-        print("⊘ 跳过（无HTML数据）")
-
-    # 测试7：读取Markdown
-    print("\n【测试7】read_markdown - 读取Markdown文件")
-    print("-" * 40)
-    if html:
-        test_file = os.path.join(TEMP_DIR, "test_md_temp.md")
-        if os.path.exists(test_file):
-            # 完整读取
-            content, error = read_markdown(test_file)
-            if error:
-                print(f"✗ 读取失败: {error}")
-            else:
-                print(f"✓ 完整读取成功，长度: {len(content)} 字符")
-
-            # 限制行数
-            content, error = read_markdown(test_file, max_lines=5)
-            if error:
-                print(f"✗ 限制行数读取失败: {error}")
-            else:
-                print(f"✓ 限制5行读取:\n{content}")
-
-            # 按标签提取
-            content, error = read_markdown(test_file, tags=["h1", "h2"])
-            if error:
-                print(f"✗ 标签过滤读取失败: {error}")
-            else:
-                print(f"✓ 按标签过滤结果:\n{content if content else '(无匹配)'}")
-        else:
-            print(f"⊘ 测试文件不存在，跳过: {test_file}")
-    else:
-        print("⊘ 跳过（无HTML数据）")
-
-    # 清理测试文件
-    print("\n【清理】删除测试文件")
-    print("-" * 40)
-    test_files = [
-        os.path.join(TEMP_DIR, "test_temp.html"),
-        # os.path.join(PERMANENT_DIR, "test_permanent.html"),
-        os.path.join(TEMP_DIR, "test_md_temp.md"),
-        # os.path.join(PERMANENT_DIR, "test_md_permanent.md"),
-    ]
-    for f in test_files:
-        if os.path.exists(f):
-            os.remove(f)
-            print(f"✓ 已删除: {f}")
-
-    print("\n" + "=" * 60)
-    print("测试完成！")
-    print("=" * 60)
-
-
-if __name__ == "__main__":
-    asyncio.run(run_tests())
