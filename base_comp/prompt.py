@@ -3,8 +3,11 @@
 包括提示词的读取、初始化、格式化、调用等
 """
 import json
+import os.path
 import re
 from typing import Any
+
+from base_comp import CONFIG_PATH
 
 ANALYSIS_NAME = "task_analysis"
 SCHEDULER_NAME = "task_scheduler"
@@ -16,7 +19,7 @@ TASK_SYNC = "task_sync"
 sys_task_types = ["coding", "system design", "personal assistant", "chat robot", "task schedule", "doc summary", "web search"]
 
 # 加载配置文件,初始化部分系统提示词
-with open("config/prompt_template.json", "r") as f:
+with open(os.path.join(CONFIG_PATH, 'prompt_template.json'), "r") as f:
     sys_conf = json.load(f)
 
 # ============================================================================

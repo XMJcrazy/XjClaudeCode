@@ -1,5 +1,4 @@
 """脚本工具模块"""
-import os
 import subprocess
 from datetime import datetime
 
@@ -8,7 +7,7 @@ from base_comp.tool_base import ToolBase, ToolResp, TOOL_ERROR_AI, TOOL_SUCCESS
 from base_comp.validate import init_validate, CommandContext
 
 
-class ToolBaseScript(ToolBase):
+class ToolBash(ToolBase):
     def __init__(self, sys: str):
         self.name = "tool_script"
         if sys:
@@ -49,6 +48,8 @@ class ToolBaseScript(ToolBase):
             r = subprocess.run(cmd_str, shell=True, cwd=work_dir,
                                capture_output=True, text=True, timeout=600)
             out = (r.stdout + r.stderr).strip()
+            # 这里做一些数据截断，防止脚本执行结果数据量太大
+            # 先简单截断，后续要通过context和skill模块进行上下文处理，避免上下文溢出
             return ToolResp(TOOL_SUCCESS, out[:50000] if out else "no output")
         except subprocess.TimeoutExpired:
             return ToolResp(TOOL_ERROR_AI, "Error: Timeout")

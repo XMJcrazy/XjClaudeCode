@@ -4,7 +4,7 @@ agent 工具包，包含所有工具的底层实现
 from manager.tools_manager import register_tool
 from tools.tool_file import ToolReadFile, ToolWriteFile, ToolEditFile
 from tools.tool_schedule import ToolTaskAnalysis, ToolTaskScheduler, ToolTaskSync
-from tools.tool_script import ToolBaseScript
+from tools.tool_bash import ToolBash
 from tools.tool_web import WebFetchToolBase, CodeSearchToolBase
 
 
@@ -22,7 +22,7 @@ def register_tools():
     register_tool(CodeSearchToolBase())
 
     # 脚本工具
-    register_tool(ToolBaseScript("macos"))
+    register_tool(ToolBash("macos"))
 
     # 简单文件操作工具
     register_tool(ToolReadFile())

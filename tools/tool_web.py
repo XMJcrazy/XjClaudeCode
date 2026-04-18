@@ -6,10 +6,12 @@
 from typing import  Optional
 from dataclasses import dataclass
 import httpx
-from urllib.parse import urlparse
+
 from bs4 import BeautifulSoup
+from markdownify import markdownify
 
 from base_comp.tool_base import ToolBase, ToolResp, TOOL_SUCCESS, TOOL_ERROR_AI, TOOL_ERROR_USER
+from base_comp.web_md import fetch_html, html_to_markdown
 
 
 # ============================================================================
@@ -54,10 +56,10 @@ class WebFetchToolBase(ToolBase):
 
     def __init__(
             self,
-            max_response_size: int = 5 * 1024 * 1024,  # 5MB
+            slice_size: int = 20 * 1024 ,  # 超过这个量的web拉取信息，就要进行额外的处理，直接返回容易造成上下文溢出
             user_agent: str = "XJ-WebFetchTool/1.0"
     ):
-        self.max_response_size = max_response_size
+        self.slice_size = slice_size
         self.user_agent = user_agent
         self.name = "web_fetch"
         self.description = """从 URL 获取网页内容并以指定格式返回。
@@ -65,14 +67,9 @@ class WebFetchToolBase(ToolBase):
         何时使用:
         - 需要获取网页、文档或 API 响应内容时
         - 用于研究、获取外部信息辅助完成任务时
-        
-        支持格式:
-        - text: 纯文本格式，自动提取 HTML 中的文本内容
-        - markdown: Markdown 格式，适合保留基本格式结构
-        - html: 原始 HTML 内容
-        
+            
         限制:
-        - 最大响应大小 5MB
+        - 最大响应大小 10MB
         - 仅支持 HTTP 和 HTTPS 协议
         - 部分网站可能阻止自动化请求
         """
@@ -90,63 +87,30 @@ class WebFetchToolBase(ToolBase):
                     "description": "返回格式: text, markdown, html",
                     "enum": ["text", "markdown", "html"]
                 },
-                "timeout": {
-                    "type": "integer",
-                    "description": "请求超时时间(秒)，最大120",
-                    "minimum": 1,
-                    "maximum": 120
-                }
             },
-            "required": ["url", "format"]
+            "required": ["url"]
         }
 
 
     async def execute(self, *args, url: str, format: str = "text", timeout: int = 30) -> ToolResp:
         """执行网页获取，返回 ToolResp 对象"""
-        # 验证 URL
-        valid, error_msg = validate_url(url)
-        if not valid:
-            return ToolResp(status_code=TOOL_ERROR_AI, content=f"错误: {error_msg}")
 
         # 限制超时，最大120秒
         timeout = min(timeout, 120)
-
         try:
-            async with httpx.AsyncClient(
-                    timeout=httpx.Timeout(timeout),
-                    follow_redirects=True,
-                    headers={"User-Agent": self.user_agent}
-            ) as client:
-                response = await client.get(url)
-                response.raise_for_status()
+            info, err_info = await fetch_html(url, format, timeout)
+            if not info:
+                return ToolResp(status_code=TOOL_ERROR_AI, content=err_info)
 
-                # 检查响应大小
-                content_length = len(response.content)
-                if content_length > self.max_response_size:
-                    return ToolResp(
-                        status_code=TOOL_ERROR_AI,
-                        content=f"错误: 响应大小 ({content_length} bytes) 超过限制 ({self.max_response_size} bytes)"
-                    )
-
-                content = response.text
-                content_type = response.headers.get("Content-Type", "")
-
-                # 根据格式处理内容
-                if format == "text":
-                    if "text/html" in content_type:
-                        return ToolResp(status_code=TOOL_SUCCESS, content=extract_text_from_html(content))
-                    return ToolResp(status_code=TOOL_SUCCESS, content=content)
-
-                elif format == "markdown":
-                    if "text/html" in content_type:
-                        return ToolResp(status_code=TOOL_SUCCESS, content=convert_html_to_markdown(content))
-                    return ToolResp(status_code=TOOL_SUCCESS, content=f"```\n{content}\n```")
-
-                elif format == "html":
-                    return ToolResp(status_code=TOOL_SUCCESS, content=content)
-
-                return ToolResp(status_code=TOOL_SUCCESS, content=content)
-
+            # 根据网络拉取数据的大小决定后续方案
+            if len(info) < self.slice_size:
+                # 小于阈值直接返回，加入上下文中
+                return ToolResp(status_code=TOOL_SUCCESS, content=info)
+            else:
+                # 大于阈值，可以做如下处理
+                # 1.开启子agent进行总结，拿到摘要信息，压缩下上文
+                # 2.本地存一份临时文件，返回一个文件信息和简单文件索引，后续可以根据需要获取文件的部分内容
+                return ToolResp(status_code=TOOL_SUCCESS, content=info)
         except httpx.TimeoutException:
             return ToolResp(status_code=TOOL_ERROR_AI, content=f"错误: 请求超时 ({timeout}秒)")
         except httpx.HTTPStatusError as e:
@@ -382,25 +346,12 @@ class CodeSearchToolBase(ToolBase):
         except Exception as e:
             return ToolResp(status_code=TOOL_ERROR_AI, content=f"错误: {str(e)}")
 
-
-def validate_url(url: str) -> tuple[bool, str]:
-    """验证 URL"""
-    try:
-        parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https"):
-            return False, "URL 必须以 http:// 或 https:// 开头"
-        if not parsed.netloc:
-            return False, "URL 缺少域名部分"
-        return True, ""
-    except Exception as e:
-        return False, f"URL 格式错误: {e}"
-
 def extract_text_from_html(html: str) -> str:
     """从 HTML 提取纯文本"""
     soup = BeautifulSoup(html, "html.parser")
 
-    # 移除 script 和 style 标签
-    for tag in soup(["script", "style", "nav", "header", "footer", "aside"]):
+    # 移除 script 和 style 标签，js禁用，嵌入内容，矢量图等信息
+    for tag in soup(["script", "style", "nav", "header", "footer", "aside", "noscript", "iframe", "svg"]):
         tag.decompose()
 
     # 获取文本
@@ -416,9 +367,10 @@ def extract_text_from_html(html: str) -> str:
 def convert_html_to_markdown(html: str) -> str:
     """HTML 转 Markdown (简化实现)"""
     try:
-        from markdownify import markdownify
         return markdownify(html)
     except ImportError:
         # 如果没有 markdownify，降级为纯文本
         return extract_text_from_html(html)
+
+
 

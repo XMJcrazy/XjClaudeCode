@@ -1,8 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-from base_comp.session import Session
-
 # ============================================================================
 # 基础工具类
 # ============================================================================
