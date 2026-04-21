@@ -8,8 +8,6 @@ from typing import Any
 
 import dotenv
 from anthropic import Anthropic, AsyncAnthropic, AsyncStream
-from anthropic._utils import required_args
-from anthropic.types import Message, RawMessageStreamEvent
 
 MODEL_TIME_OUT = 600
 
@@ -34,7 +32,6 @@ async def anthropic_message(client_: AsyncAnthropic, **kwargs):
 
 
 # 大模型对话异常处理包装方法
-@required_args(["max_tokens", "messages", "model"], ["max_tokens", "messages", "model", "stream"])
 async def create_anthropic_message(**kwargs):
     try:
         response = await asyncio.wait_for(anthropic_message(async_client, **kwargs), timeout=MODEL_TIME_OUT)

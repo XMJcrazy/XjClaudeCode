@@ -63,3 +63,11 @@ def init_logger(tp: LogType, level=logging.INFO):
             # 线上不需要开启日志颜色功能
             LOGGER.setLevel(level)
             LOGGER.addHandler(file_handler)
+#
+# init_logger(LogType.LOCAL, logging.DEBUG)
+#
+# LOGGER.debug('This is a debug message')
+# LOGGER.info('This is an info message')
+# LOGGER.warning('This is a warning message')
+# LOGGER.error('This is an error message')
+# LOGGER.critical('This is a critical message')

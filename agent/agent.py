@@ -1,9 +1,9 @@
 import asyncio
 
-from base_comp.ai_model import async_client, MODEL, create_anthropic_message
+from base_comp.ai_model import MODEL, create_anthropic_message
 from base_comp.prompt import PROMPT_SYS_SUB_AGENT, PROMPT_SYS_ANALYSIS, \
     PROMPT_SYS_DEFAULT, get_sys_prompt, ANALYSIS_NAME, PROMPT_SYS_TASK_SCHEDULER, PROMPT_TASK_MONITOR, TASK_SYNC, \
-    prompt_inject, SCHEDULER_NAME
+    prompt_inject
 from base_comp.schedule import TaskGraph, Task
 from base_comp.session import SessionCtx
 from .common import StopReason
@@ -205,7 +205,7 @@ async def analysis_task(session_ctx: SessionCtx, messages: list) -> tuple[str, b
     analysis_msgs = [{"role":"user", "content":["分析下面任务的任务类别并判断是否需要进行任务拆分"]}] + messages
     for _ in range(10):
         # 为了避免单次分析失败，加入循环确认，最多交互十次（后面可以根据实际情况调整），超过十次还没解决就用默认agent类别
-        is_ok, analysis_info = await create_anthropic_message(max_tokens=1024, messages=analysis_msgs, model=MODEL, system=PROMPT_SYS_ANALYSIS, tools=ANALYSIS_TOOLS)
+        is_ok, analysis_info = await create_anthropic_message(max_tokens=512, messages=analysis_msgs, model=MODEL, system=PROMPT_SYS_ANALYSIS, tools=ANALYSIS_TOOLS)
         if not is_ok:
             print(f"model chat error:{analysis_info}")
             continue
