@@ -4,7 +4,6 @@ AI模型操作模块
 """
 import asyncio
 import os
-from typing import Any
 
 import dotenv
 from anthropic import Anthropic, AsyncAnthropic, AsyncStream
@@ -36,6 +35,19 @@ async def create_anthropic_message(**kwargs):
     try:
         response = await asyncio.wait_for(anthropic_message(async_client, **kwargs), timeout=MODEL_TIME_OUT)
         if response is None or response.content is None:
+            return False, f"model response illegal. response:{response}"
+        return True, response
+    except TimeoutError:
+        return False, f"模型访问超时: time > {MODEL_TIME_OUT}s"
+    except Exception as e:
+        return False, str(e)
+
+# 大模型流式对话异常处理包装方法
+async def create_anthropic_stream(**kwargs):
+    try:
+        kwargs["stream"] = True
+        response = await asyncio.wait_for(anthropic_message(async_client, **kwargs), timeout=MODEL_TIME_OUT)
+        if not isinstance(response, AsyncStream):
             return False, f"model response illegal. response:{response}"
         return True, response
     except TimeoutError:

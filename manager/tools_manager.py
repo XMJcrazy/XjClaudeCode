@@ -8,6 +8,7 @@ import threading
 from base_comp.prompt import ANALYSIS_NAME, SCHEDULER_NAME
 from base_comp.session import SessionCtx
 from base_comp.tool_base import ToolBase, TOOL_SUCCESS
+from utils.log import LOGGER
 
 # 分析类工具，这个需要单独使用
 scheduler_names = [ANALYSIS_NAME, SCHEDULER_NAME]
@@ -44,7 +45,7 @@ async def route_tool_use(tool_name: str, ctx: SessionCtx, **kwargs):
         return False, f"tool not found:{tool_name}", None
     else:
         try:
-            print(f"PREPARE USE TOOL:{tool_name} with args:{kwargs}")
+            LOGGER.info(f"PREPARE USE TOOL:{tool_name} with args:{kwargs}")
             resp = await asyncio.wait_for(tool.execute(ctx, **kwargs), 600)
         except asyncio.TimeoutError:
             # TODO超时要做指数退阶的重试，这里先简单处理
