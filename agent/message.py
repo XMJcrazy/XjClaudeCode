@@ -16,9 +16,9 @@ class AgentMessages:
     is_stop: bool = False                   # 轮次是否结束
     stop_reason: str = None                 # 结束的原因
     stop_detail: str = None                 # 结束的具体细节
-    ai_msg: dict = None                     # 模型端单轮次调用返回信息
-    user_content = []                       # 用户端额外信息，主要是工具调用信息
-    tool_objs = {}                          # 工具调用的额外参数信息，适用于部分状态控制，任务调度的tool
+    ai_msg: dict = field(default_factory=dict)           # 模型端单轮次调用返回信息
+    user_content:list = field(default_factory=list)      # 用户端额外信息，主要是工具调用信息
+    tool_objs: dict = field(default_factory=dict)        # 工具调用的额外参数信息，适用于部分状态控制，任务调度的tool
 
 
 async def process_stream(stream: AsyncStream, ctx: SessionCtx, **kwargs) -> AgentMessages:
@@ -28,7 +28,7 @@ async def process_stream(stream: AsyncStream, ctx: SessionCtx, **kwargs) -> Agen
     :param ctx: 上下问信息，单个会话的上下文是独立的，会话基础信息，状态数据、任务执行信息等都在这里
     """
 
-    # 解析额外字典参数，hide_thinking-隐藏思考信息、
+    # 解析额外字典参数，hide_thinking-隐藏思考信息
     hide_thinking = kwargs.get("hide_thinking", False)
 
     agent_msg, ai_msg = AgentMessages(), {}
@@ -44,71 +44,58 @@ async def process_stream(stream: AsyncStream, ctx: SessionCtx, **kwargs) -> Agen
                 if ai_msg.stop_reason:
                     if event.message.stop_reason != StopReason.TOOL_USE.value:
                         agent_msg.is_stop = True
-                        agent_msg.stop_reason = event.message.stop_reason
+                        agent_msg.stop_reason = event.message.stop_reason == StopReason.END_TURN.value
                         agent_msg.stop_details = event.message.stop_details
                         print(f"TASK STOP: {event.message.stop_reason}", flush=True)
-
 
             case "message_delta":
                 # 消息增量事件，主要存放token数据、stop_reason、工具调用等
                 # TODO 这里可以加token量记录相关功能，后续要加上
                 pass
             case "content_block_start":
-                block = {"index": event.index}
-                block.update(dict(event.content_block))
                 # 文本块开始事件,根据返回信息构建文本块，目前仅支持下面类型，额外的类型直接忽略
                 if event.content_block.type in [MSG_THINK, MSG_TEXT, MSG_TOOL]:
+                    ai_msg.content.append(event.content_block)
+                    if event.content_block.type == MSG_THINK:
+                        print(f"[thinking...]", end="", flush=True)
                     if event.content_block.type == MSG_TOOL:
-                        block["temp_input"] = ""
-
-                    ai_msg.content.append(block)
-                    if block.get("citations"):
-                        print(f"Citations: {event.content_block.citations}", flush=True)
+                        ai_msg.content[-1].input = {"temp_input": []}
 
             case "content_block_delta":
                 # 增量消息目前仅解析text、thinking、tool_use
-                # 如果block丢失，则重新构建，极端情况下消息丢失的降级处理
-                if ai_msg.content is None or len(ai_msg.content) == 0 or ai_msg.content[-1].get("index") != event.index:
-                    if event.delta.type == "thinking_delta":
-                        ai_msg.content.append({"index": event.index, "type": MSG_THINK, "thinking": event.delta.thinking})
-                    elif event.delta.type == "text_delta":
-                        ai_msg.content.append({"index": event.index, "type": MSG_TEXT, "text": event.delta.text})
-                    # 工具调用如果start丢失，就不知道调用什么tool，直接忽略
-                    # elif event.delta.type == "input_json_delta":
-                else:
-                    if event.delta.type == "thinking_delta":
-                        if not hide_thinking:
-                            print(f"[thinking] {event.delta.thinking[:1000]}...", end="", flush=True)
-                        ai_msg.content[-1]["thinking"] = ''.join([ai_msg.content[-1]["thinking"], event.delta.thinking])
-                    elif event.delta.type == "text_delta":
-                        print(event.delta.text, end="", flush=True)
-                        ai_msg.content[-1]["text"] = ''.join([ai_msg.content[-1]["text"], event.delta.text])
-                    elif event.delta.type == "input_json_delta":
-                        # 工具调用信息可能不是在一个delta里面传过来的，需要进行合并
-                        ai_msg.content[-1]["temp_input"] = ''.join([ai_msg.content[-1]["temp_input"], event.delta.partial_json])
+                if event.delta.type == "thinking_delta":
+                    if not hide_thinking:
+                        print(f"{event.delta.thinking[:1000]}", end="", flush=True)
+                    ai_msg.content[-1].thinking = ''.join([ai_msg.content[-1].thinking, event.delta.thinking])
+                elif event.delta.type == "text_delta":
+                    print(event.delta.text, end="", flush=True)
+                    ai_msg.content[-1].text = ''.join([ai_msg.content[-1].text, event.delta.text])
+                elif event.delta.type == "input_json_delta":
+                    # 工具调用信息可能不是在一个delta里面传过来的，需要进行合并
+                    ai_msg.content[-1].input["temp_input"].append(event.delta.partial_json)
 
             case "content_block_stop":
-                # 文本块结束
-                if ai_msg.content is None or len(ai_msg.content) == 0 or ai_msg.content[-1].get("index") != event.index:
-                    LOGGER.error("illegal block, content_block_stop without block info.")
-                elif ai_msg.content[-1].get("type") == MSG_TOOL:
-                    ai_msg.content[-1]["input"] = json.loads(ai_msg.content[-1]["temp_input"])
+                # 消息块结束,构建合法且精简的请求message block
+                if ai_msg.content[-1].type == MSG_TOOL:
                     # 如果是工具调用请求block，则需要触发对应的agent逻辑
+                    ai_msg.content[-1].input = json.loads(''.join(ai_msg.content[-1].input["temp_input"]))
+                    # del ai_msg.content[-1]["temp_input"]
                     await tool_call(ctx, agent_msg, ai_msg.content[-1])
+
             case "message_stop":
                 # 单turn对话流结束
                 LOGGER.info("AI model single turn over.ai_msg id: %s", ai_msg.id)
 
-    agent_msg.ai_msg = ai_msg
+    agent_msg.ai_msg = ai_msg.to_dict()
     return agent_msg
 
 
 async def tool_call(ctx: SessionCtx, agent_msg: AgentMessages, tool_block):
     """处理大模型工具调用的agent包装方法"""
-    name = tool_block.get("name")
-    success, tool_resp, tool_obj = await route_tool_use(name, ctx, **tool_block.get("input"))
+    name = tool_block.name
+    success, tool_resp, tool_obj = await route_tool_use(name, ctx, **tool_block.input)
     # 工具调用信息
-    agent_msg.user_content.append({"type": "tool_result", "tool_use_id": tool_block.get("id"), "content": tool_resp})
+    agent_msg.user_content.append({"type": "tool_result", "tool_use_id": tool_block.id, "content": tool_resp})
     print(f"TOOL RESP：{tool_resp[:500]}")
     if not success:
         LOGGER.info("AI model tool_call - %s fail: %s", name, tool_resp)
