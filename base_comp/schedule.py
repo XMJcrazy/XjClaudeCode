@@ -1,10 +1,11 @@
 """
 任务调度、管理、编排基础模块
 """
-import dataclasses
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional
+
+from utils.error import exception_handler
 
 # 最大子任务数量，后续可以改成配置
 MAX_NUM = 100
@@ -41,6 +42,7 @@ class TaskGraph:
         self.completed = 0                  # 完成的task数量
         self._tasks: Dict[str, Task] = {}   # 所有的task信息
 
+    @exception_handler
     def add_task(self, id: str, name: str, dependencies: List[str] = None):
         """
         添加一个任务节点到图中
@@ -95,6 +97,7 @@ class TaskGraph:
 
         return True
 
+    @exception_handler
     def _has_cycle(self) -> bool:
         """
         使用深度优先搜索检测图中是否存在环
@@ -203,6 +206,7 @@ class TaskGraph:
         """根据id获取任务"""
         return self._tasks.get(id)
 
+    @exception_handler
     def set_pending(self, id: str):
         """将任务设置为等待状态"""
         task = self._tasks.get(id)
@@ -210,6 +214,7 @@ class TaskGraph:
             raise ValueError(f"任务 '{id}' 不存在")
         task.state = TaskState.PENDING
 
+    @exception_handler
     def set_field(self, id: str):
         """将任务设置为等待状态"""
         task = self._tasks.get(id)
@@ -217,6 +222,7 @@ class TaskGraph:
             raise ValueError(f"任务 '{id}' 不存在")
         task.state = TaskState.FIELD
 
+    @exception_handler
     def set_running(self, id: str):
         """将任务设置为运行状态"""
         task = self._tasks.get(id)
@@ -226,6 +232,7 @@ class TaskGraph:
             raise ValueError(f"任务 '{id}' 尚不可执行（依赖未完成或状态不是pending或field）")
         task.state = TaskState.RUNNING
 
+    @exception_handler
     def set_completed(self, id: str):
         """将任务设置为完成状态"""
         task = self._tasks.get(id)
@@ -302,29 +309,26 @@ if __name__ == "__main__":
     }
     map = {"1":"task1", "2":"task2", "3":"task3", "4":"task4", "5":"task5"}
     # 从字典创建任务图
-    try:
-        graph = TaskGraph.from_dict("总任务", map, data)
+    graph = TaskGraph.from_dict("总任务", map, data)
 
-        graph.print_graph()
-        print(graph.to_dict())
-        print(f"图是否合法: {graph.is_valid()}")
-        print(f"所有任务: {graph.get_all_tasks()}")
-        print(f"可执行任务: {graph.get_executable_tasks()}")
-        # 执行任务流程
-        graph.set_running("1")
-        graph.set_completed("1")
-        print(f"start完成后，可执行任务: {graph.get_executable_tasks()}")
-        graph.set_running("2")
-        graph.set_completed("2")
-        print(f"a完成后，可执行任务: {graph.get_executable_tasks()}")
-        graph.set_running("3")
-        graph.set_completed("3")
-        print(f"b完成后，可执行任务: {graph.get_executable_tasks()}")
-        graph.set_running("4")
-        graph.set_completed("4")
-        print(f"c完成后，可执行任务: {graph.get_executable_tasks()}")
-        graph.set_running("5")
-        graph.set_completed("5")
-        print(f"所有任务都完成: {graph.is_all_completed()}")
-    except Exception as e:
-        print(e)
+    graph.print_graph()
+    print(graph.to_dict())
+    print(f"图是否合法: {graph.is_valid()}")
+    print(f"所有任务: {graph.get_all_tasks()}")
+    print(f"可执行任务: {graph.get_executable_tasks()}")
+    # 执行任务流程
+    graph.set_running("1")
+    graph.set_completed("1")
+    print(f"start完成后，可执行任务: {graph.get_executable_tasks()}")
+    graph.set_running("2")
+    graph.set_completed("2")
+    print(f"a完成后，可执行任务: {graph.get_executable_tasks()}")
+    graph.set_running("3")
+    graph.set_completed("3")
+    print(f"b完成后，可执行任务: {graph.get_executable_tasks()}")
+    graph.set_running("4")
+    graph.set_completed("4")
+    print(f"c完成后，可执行任务: {graph.get_executable_tasks()}")
+    graph.set_running("5")
+    graph.set_completed("5")
+    print(f"所有任务都完成: {graph.is_all_completed()}")
